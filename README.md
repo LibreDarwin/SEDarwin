@@ -68,9 +68,18 @@ installs the boot-time loader described below:
 ```sh
 make && sudo make install            # kext + loader; leaves it DISARMED
 # System Settings > Privacy & Security -> allow the signing developer
-sudo touch /var/db/sedarwin.enabled  # arm the boot loader
-sudo reboot
-make status                          # installed / armed / loaded / trace
+sudo reboot                          # required: the auxKC is rebuilt at boot
+sudo make load                       # deliberate, interactive load
+make status                          # installed / armed / loaded / hooks / trace
+```
+
+Load a new build **interactively** (`sudo make load`) rather than by arming the
+boot daemon. If the build wedges the machine, a power cycle comes back to a
+working system, because the daemon is still disarmed and will not retry it. Only
+once a build has proven itself is it worth arming:
+
+```sh
+sudo touch /var/db/sedarwin.enabled  # now it loads at every boot
 ```
 
 **Every rebuild needs that whole cycle again.** A recompiled kext has a new
@@ -110,6 +119,39 @@ the boot path.
 The kext is a `MPC_LOADTIME_FLAG_NOTLATE`-free, late-loading policy, so it
 registers after the kernel's own policies (SIP, sandbox, seatbelt). The kext
 must still be dev-mode signed/admitted — see Requirements.
+
+### Hook groups: bisecting without rebuilding
+
+The policy registers with **no check hooks installed** — only the lifecycle
+slots, which fire once each from the register path. Everything else is opt-in
+at runtime:
+
+```sh
+sysctl sedarwin.hooks            # 0 on a fresh load
+sudo sysctl sedarwin.hooks=1     # + vnode checks
+sudo sysctl sedarwin.hooks=3     # + vnode label hooks
+sudo sysctl sedarwin.hooks=0     # back to inert
+```
+
+| bit | group | hooks |
+|-----|-------|-------|
+| 0x01 | vnode checks | open, create, unlink, rename, lookup, readlink, getattr, setattrlist |
+| 0x02 | vnode labels | label_associate_extattr, label_copy |
+| 0x04 | file | mmap, library validation |
+| 0x08 | proc | signal, fork, exit |
+| 0x10 | socket | connect, create, listen |
+| 0x20 | pty | pty grant |
+| 0x40 | exec | vnode_check_exec, exec_complete |
+
+This works because the framework never copies the ops vector: it keeps the
+pointer handed to `mac_policy_register()` and re-reads the slot on every
+dispatch, treating NULL as "no opinion". Filling or clearing a slot on a live
+policy therefore takes effect immediately.
+
+That property is what makes this kext debuggable at all. A rebuilt kext has a
+new cdhash, so testing one costs a re-approval **and** a reboot; flipping this
+mask costs a `sysctl` write. Enable one group, exercise the machine, and if it
+survives, move to the next.
 
 ### Diagnostics
 
@@ -168,6 +210,41 @@ ABI to the kernel it was verified against (macOS 26.5.2, build 25F84, xnu
   the ABI assumption ever breaks.
 
 On a different kernel, re-verify the offsets before using this as a base.
+
+### Verifying the ABI against the kernel
+
+The claims above are checkable, and were checked, against the matching Kernel
+Debug Kit (`/Library/Developer/KDKs/KDK_26.5.2_25F84.kdk`) rather than by
+inspection. The release kernel ships a dSYM with full DWARF, so the real
+struct is readable:
+
+```sh
+DS=/Library/Developer/KDKs/KDK_26.5.2_25F84.kdk/System/Library/Kernels/kernel.release.t8142.dSYM/Contents/Resources/DWARF/kernel.release.t8142
+dwarfdump --name=mac_policy_ops "$DS"        # DW_AT_byte_size (0x0a78) = 2680
+```
+
+Dumping the members with `DW_AT_data_member_location` gives all 335 slot
+offsets, which can be diffed against the struct in `sebsd_mac.h` — the order
+matches exactly, and every hook this policy installs lands on the slot the
+kernel expects.
+
+There is a second, easily-missed requirement on arm64e: the kernel dispatches
+hooks through an **authenticated** branch.
+
+```
+ldr   x8,  [x23, #0x20]    ; mpc_ops
+ldr   x26, [x8, #0x858]    ; mpo_vnode_check_open
+mov   x17, #0x1586         ; type discriminator
+blraa x26, x17
+```
+
+So a slot must hold a pointer signed with key IA and that slot's discriminator,
+or the call fails authentication. The compiler emits the correct `pacia` when
+the pointer is stored **through the typed struct member** — which is why
+`sebsd_install_hooks()` assigns members directly and never memcpy's or casts
+through a generic pointer type. Scanning the kernel for `mpc_ops`-based
+dispatches yields 286 slots with their discriminators; all of this policy's
+hooks match.
 
 ## Versioning
 

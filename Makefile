@@ -113,9 +113,13 @@ uninstall: require-root
 # `load` goes through the same script the boot daemon runs, so what you test
 # interactively is exactly what happens at boot - including the arm-flag gate.
 
+#
+# Note this does NOT need (or set) the arm flag: an interactive load is the
+# safer way to try a suspect build, because a power cycle recovers to a working
+# machine with the boot daemon still disarmed. Arm the flag only once a build
+# has proven itself.
 load: require-root
-	@[ -e "$(ARM_FLAG)" ] || { echo "error: loader is disarmed. Arm it first: sudo touch $(ARM_FLAG)"; exit 1; }
-	$(SBIN_DIR)/$(LOAD_SCRIPT)
+	$(SBIN_DIR)/$(LOAD_SCRIPT) --force
 
 unload: require-root
 	kmutil unload -b $(BUNDLE_ID)
@@ -127,6 +131,7 @@ status:
 	@echo "armed:      $$([ -e $(ARM_FLAG) ] && echo yes || echo "no ($(ARM_FLAG) absent)")"
 	@echo "daemon:     $$(launchctl print system/$(DAEMON_LABEL) >/dev/null 2>&1 && echo bootstrapped || echo "not bootstrapped")"
 	@echo "loaded:     $$(kmutil showloaded 2>/dev/null | grep -q $(BUNDLE_ID) && echo yes || echo no)"
+	@echo "hooks:      $$(sysctl -n sedarwin.hooks 2>/dev/null || echo "n/a (policy not registered)")"
 	@echo "trace:      $$(sysctl -n sedarwin.trace 2>/dev/null || echo "n/a (policy not registered)")"
 
 # ---------------------------------------------------------------------------

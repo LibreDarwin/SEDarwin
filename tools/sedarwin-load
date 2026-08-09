@@ -23,12 +23,22 @@
 # registers a MAC policy, so its hooks sit on every open/exec/signal/connect on
 # the system from the moment it loads.
 #
+#
+# `--force` skips the arm-flag check. It is for a deliberate, interactive load
+# (`sudo make load`), which is the SAFER way to try a suspect build: if it wedges
+# the machine, a power cycle comes back to a working system, because the boot
+# daemon is still disarmed and will not retry. Arming the flag is for when the
+# kext is known-good and you want it at every boot.
+#
 set -u
 
 ARM_FLAG="/var/db/sedarwin.enabled"
 KEXT="/Library/Extensions/sedarwin.kext"
 BUNDLE_ID="com.beako.security.sedarwin"
 TRIES=30
+FORCE=0
+
+[ "${1:-}" = "--force" ] && FORCE=1
 
 log() { echo "sedarwin-load: $*"; }
 
@@ -36,7 +46,7 @@ kext_loaded() {
     kmutil showloaded 2>/dev/null | grep -q "$BUNDLE_ID"
 }
 
-if [ ! -e "$ARM_FLAG" ]; then
+if [ "$FORCE" -eq 0 ] && [ ! -e "$ARM_FLAG" ]; then
     log "disarmed ($ARM_FLAG absent); not loading. Arm with: sudo touch $ARM_FLAG"
     exit 0
 fi
@@ -90,12 +100,15 @@ fi
 
 log "loaded $BUNDLE_ID"
 
-# The policy registers with per-event tracing OFF; the sysctl only exists once
-# _start has run, so this doubles as confirmation that registration succeeded.
-if sysctl -n sedarwin.trace >/dev/null 2>&1; then
-    log "policy registered (sedarwin.trace=$(sysctl -n sedarwin.trace))"
+# The policy registers with NO check hooks and tracing off; the sysctls only
+# exist once _start has run, so this doubles as confirmation that registration
+# succeeded.
+if sysctl -n sedarwin.hooks >/dev/null 2>&1; then
+    log "policy registered (hooks=$(sysctl -n sedarwin.hooks), trace=$(sysctl -n sedarwin.trace))"
+    log "no check hooks are installed yet; add one group at a time, e.g."
+    log "    sudo sysctl sedarwin.hooks=1   # vnode checks"
 else
-    log "WARNING: kext loaded but sysctl sedarwin.trace is absent -"
+    log "WARNING: kext loaded but sysctl sedarwin.hooks is absent -"
     log "mac_policy_register() may have failed; check the kernel log."
     exit 1
 fi

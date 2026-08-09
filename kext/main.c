@@ -73,6 +73,16 @@ static int sebsd_registered;
 int sebsd_trace_enabled = 0;
 
 /*
+ * Which hook groups are currently installed (sysctl sedarwin.hooks). Starts at
+ * SEBSD_HOOK_DEFAULT - no check hooks at all - so a fresh load puts nothing on
+ * any system call path until an operator asks for it. See sebsd_install_hooks().
+ */
+static int sebsd_hooks_enabled = SEBSD_HOOK_DEFAULT;
+
+/* Defined below; the sysctl handler needs it before its definition. */
+static void sebsd_install_hooks(struct mac_policy_ops *ops, int mask);
+
+/*
  * The oids are built by hand rather than with the SYSCTL_* macros. Under
  * XNU_KERNEL_PRIVATE (which this kext compiles with) those macros expand to an
  * in-kernel STARTUP auto-registration referencing sysctl_register_oid_early()
@@ -110,60 +120,125 @@ static struct sysctl_oid sebsd_sysctl_trace = {
 	.oid_version = SYSCTL_OID_VERSION,
 };
 
+/*
+ * Writing sedarwin.hooks installs or removes hook groups on the live policy.
+ * Reject unknown bits rather than silently ignoring them, so a typo does not
+ * look like it worked.
+ */
+static int
+sebsd_sysctl_hooks_handler(struct sysctl_oid *oidp, void *arg1, int arg2,
+    struct sysctl_req *req)
+{
+	int value = sebsd_hooks_enabled;
+	int error;
+
+	(void)arg1;
+	(void)arg2;
+
+	error = sysctl_handle_int(oidp, &value, 0, req);
+	if (error != 0 || req->newptr == 0) {
+		return error;   /* read, or a failed write */
+	}
+	if ((value & ~SEBSD_HOOK_ALL) != 0) {
+		return EINVAL;
+	}
+
+	sebsd_hooks_enabled = value;
+	sebsd_install_hooks(&sebsd_ops, value);
+	sebsd_log("hooks now 0x%x", value);
+	return 0;
+}
+
+static struct sysctl_oid sebsd_sysctl_hooks = {
+	.oid_parent  = &sebsd_sysctl_children,
+	.oid_number  = OID_AUTO,
+	.oid_kind    = CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_OID2,
+	.oid_arg1    = &sebsd_hooks_enabled,
+	.oid_arg2    = 0,
+	.oid_name    = "hooks",
+	.oid_handler = sebsd_sysctl_hooks_handler,
+	.oid_fmt     = "I",
+	.oid_descr   = "installed hook groups (bitmask; 0 = none)",
+	.oid_version = SYSCTL_OID_VERSION,
+};
+
 static void
 sebsd_sysctl_register(void)
 {
 	sysctl_register_oid(&sebsd_sysctl_node);   /* parent first */
 	sysctl_register_oid(&sebsd_sysctl_trace);
+	sysctl_register_oid(&sebsd_sysctl_hooks);
 }
 
 static void
 sebsd_sysctl_unregister(void)
 {
+	sysctl_unregister_oid(&sebsd_sysctl_hooks);
 	sysctl_unregister_oid(&sebsd_sysctl_trace);
 	sysctl_unregister_oid(&sebsd_sysctl_node);
 }
 
 /*
- * Wire the implemented hooks into the ops vector. Every slot we do not touch
- * stays NULL (the struct is zero-initialized), which the framework treats as
- * "policy has no opinion". Assignment, not C99 designated initializers, so a
- * stray field rename breaks the build loudly rather than silently shifting
- * every later hook.
+ * Lifecycle slots. These are the only hooks installed at registration time:
+ * they fire once each, from the register/unregister path itself, and cannot be
+ * reached by ordinary system activity.
+ *
+ * Assignment, not C99 designated initializers, so a stray field rename breaks
+ * the build loudly rather than silently shifting every later hook.
  */
 static void
-sebsd_fill_ops(struct mac_policy_ops *ops)
+sebsd_install_lifecycle(struct mac_policy_ops *ops)
 {
 	ops->mpo_policy_init                     = sebsd_policy_init;
 	ops->mpo_policy_initbsd                  = sebsd_policy_initbsd;
 	ops->mpo_policy_destroy                  = sebsd_policy_destroy;
+}
 
-	ops->mpo_vnode_check_open                = sebsd_vnode_check_open;
-	ops->mpo_vnode_check_create              = sebsd_vnode_check_create;
-	ops->mpo_vnode_check_unlink              = sebsd_vnode_check_unlink;
-	ops->mpo_vnode_check_rename              = sebsd_vnode_check_rename;
-	ops->mpo_vnode_check_lookup              = sebsd_vnode_check_lookup;
-	ops->mpo_vnode_check_readlink            = sebsd_vnode_check_readlink;
-	ops->mpo_vnode_check_getattr             = sebsd_vnode_check_getattr;
-	ops->mpo_vnode_check_setattrlist         = sebsd_vnode_check_setattrlist;
-	ops->mpo_vnode_label_associate_extattr   = sebsd_vnode_label_associate_extattr;
-	ops->mpo_vnode_label_copy                = sebsd_vnode_label_copy;
+/*
+ * Install (or remove) the per-event hooks named by `mask`.
+ *
+ * The framework does not copy the ops vector - it keeps the pointer passed to
+ * mac_policy_register() and re-reads the slot on every dispatch, treating NULL
+ * as "no opinion". So filling or clearing a slot on a live policy takes effect
+ * immediately, and a group can be enabled or disabled without reloading the
+ * kext. Each slot is a single naturally-aligned pointer store; a dispatch
+ * racing the store sees either the old pointer or the new one, both valid.
+ *
+ * Writing through the typed struct member (rather than memcpy or a cast) is
+ * what gets the pointer signed with the right arm64e discriminator for that
+ * slot - the kernel dispatches with `blraa`, so an unsigned or wrongly-signed
+ * pointer would fail authentication.
+ */
+static void
+sebsd_install_hooks(struct mac_policy_ops *ops, int mask)
+{
+	ops->mpo_vnode_check_open                = (mask & SEBSD_HOOK_VNODE_CHECK) ? sebsd_vnode_check_open : NULL;
+	ops->mpo_vnode_check_create              = (mask & SEBSD_HOOK_VNODE_CHECK) ? sebsd_vnode_check_create : NULL;
+	ops->mpo_vnode_check_unlink              = (mask & SEBSD_HOOK_VNODE_CHECK) ? sebsd_vnode_check_unlink : NULL;
+	ops->mpo_vnode_check_rename              = (mask & SEBSD_HOOK_VNODE_CHECK) ? sebsd_vnode_check_rename : NULL;
+	ops->mpo_vnode_check_lookup              = (mask & SEBSD_HOOK_VNODE_CHECK) ? sebsd_vnode_check_lookup : NULL;
+	ops->mpo_vnode_check_readlink            = (mask & SEBSD_HOOK_VNODE_CHECK) ? sebsd_vnode_check_readlink : NULL;
+	ops->mpo_vnode_check_getattr             = (mask & SEBSD_HOOK_VNODE_CHECK) ? sebsd_vnode_check_getattr : NULL;
+	ops->mpo_vnode_check_setattrlist         = (mask & SEBSD_HOOK_VNODE_CHECK) ? sebsd_vnode_check_setattrlist : NULL;
 
-	ops->mpo_file_check_mmap                 = sebsd_file_check_mmap;
-	ops->mpo_file_check_library_validation   = sebsd_file_check_library_validation;
+	ops->mpo_vnode_label_associate_extattr   = (mask & SEBSD_HOOK_VNODE_LABEL) ? sebsd_vnode_label_associate_extattr : NULL;
+	ops->mpo_vnode_label_copy                = (mask & SEBSD_HOOK_VNODE_LABEL) ? sebsd_vnode_label_copy : NULL;
 
-	ops->mpo_proc_check_signal               = sebsd_proc_check_signal;
-	ops->mpo_proc_check_fork                 = sebsd_proc_check_fork;
-	ops->mpo_proc_notify_exit                = sebsd_proc_notify_exit;
+	ops->mpo_file_check_mmap                 = (mask & SEBSD_HOOK_FILE) ? sebsd_file_check_mmap : NULL;
+	ops->mpo_file_check_library_validation   = (mask & SEBSD_HOOK_FILE) ? sebsd_file_check_library_validation : NULL;
 
-	ops->mpo_socket_check_connect            = sebsd_socket_check_connect;
-	ops->mpo_socket_check_create             = sebsd_socket_check_create;
-	ops->mpo_socket_check_listen             = sebsd_socket_check_listen;
+	ops->mpo_proc_check_signal               = (mask & SEBSD_HOOK_PROC) ? sebsd_proc_check_signal : NULL;
+	ops->mpo_proc_check_fork                 = (mask & SEBSD_HOOK_PROC) ? sebsd_proc_check_fork : NULL;
+	ops->mpo_proc_notify_exit                = (mask & SEBSD_HOOK_PROC) ? sebsd_proc_notify_exit : NULL;
 
-	ops->mpo_pty_notify_grant                = sebsd_pty_notify_grant;
+	ops->mpo_socket_check_connect            = (mask & SEBSD_HOOK_SOCKET) ? sebsd_socket_check_connect : NULL;
+	ops->mpo_socket_check_create             = (mask & SEBSD_HOOK_SOCKET) ? sebsd_socket_check_create : NULL;
+	ops->mpo_socket_check_listen             = (mask & SEBSD_HOOK_SOCKET) ? sebsd_socket_check_listen : NULL;
 
-	ops->mpo_vnode_check_exec                = sebsd_spawn_check_exec;
-	ops->mpo_proc_notify_exec_complete       = sebsd_spawn_notify_exec_complete;
+	ops->mpo_pty_notify_grant                = (mask & SEBSD_HOOK_PTY) ? sebsd_pty_notify_grant : NULL;
+
+	ops->mpo_vnode_check_exec                = (mask & SEBSD_HOOK_EXEC) ? sebsd_spawn_check_exec : NULL;
+	ops->mpo_proc_notify_exec_complete       = (mask & SEBSD_HOOK_EXEC) ? sebsd_spawn_notify_exec_complete : NULL;
 }
 
 void
@@ -201,7 +276,8 @@ sebsd_mac_policy_register(kmod_info_t *ki, void *data)
 	(void)ki;
 	(void)data;
 
-	sebsd_fill_ops(&sebsd_ops);
+	sebsd_install_lifecycle(&sebsd_ops);
+	sebsd_install_hooks(&sebsd_ops, sebsd_hooks_enabled);
 	sebsd_sysctl_register();
 
 	error = mac_policy_register(&sebsd_policy_conf, &sebsd_handle, NULL);
@@ -219,7 +295,12 @@ sebsd_mac_policy_register(kmod_info_t *ki, void *data)
 	}
 
 	sebsd_registered = 1;
-	sebsd_log("registered with MAC framework (handle %u)", sebsd_handle);
+	sebsd_log("registered with MAC framework (handle %u), hooks=0x%x",
+	    sebsd_handle, sebsd_hooks_enabled);
+	if (sebsd_hooks_enabled == 0) {
+		sebsd_log("no check hooks installed; enable groups with "
+		    "`sysctl sedarwin.hooks=<mask>`");
+	}
 	return KERN_SUCCESS;
 }
 
@@ -234,6 +315,15 @@ sebsd_mac_policy_unregister(kmod_info_t *ki, void *data)
 	if (!sebsd_registered) {
 		return KERN_SUCCESS;
 	}
+
+	/*
+	 * Clear the per-event slots before asking the framework to drop the
+	 * policy: from here on a dispatch that is already in flight reads NULL
+	 * and skips us, which narrows the window in which the framework can
+	 * enter this module while it is being torn down. The lifecycle slots
+	 * stay - mac_policy_unregister() still calls mpo_policy_destroy().
+	 */
+	sebsd_install_hooks(&sebsd_ops, 0);
 
 	error = mac_policy_unregister(sebsd_handle);
 	if (error != 0) {
