@@ -233,10 +233,33 @@ sysctl sedarwin.lookup_count           # how many landed
 sysctl sedarwin.hooks                  # bit 0x10 gone once the fuse blew
 ```
 
-Raising the fuse until it breaks brackets the mechanism. Surviving a fuse of 1
-but dying at some larger N means the fault is cumulative — a leak or unbounded
-growth — rather than something wrong with the first call. Dying even at 1 means
-it is deterministic, and the first dispatch is enough.
+Raising the fuse until it breaks brackets the mechanism.
+
+**Result: a fuse of 1 survives.** `lookup_count` reads 1, the fuse clears the
+bit from `sedarwin.hooks`, and the machine stays up. So a single dispatch of
+this hook is harmless, and the fault is **cumulative or rate-dependent** — not
+something wrong with the first call. That also retires any lingering doubt about
+the slot, the signature or the label resolve: all of those would fail
+deterministically on dispatch #1.
+
+##### Measuring the leak hypothesis
+
+The kernel has a `MAC.Labels` zone and `zprint` reports it without root, so a
+label leak can be tested at a safe fuse rather than by escalating into the wedge:
+
+```sh
+zprint | awk '/^MAC\.Labels/{print $7}'      # inuse, before
+sudo sysctl -w sedarwin.lookup_count=0 sedarwin.lookup_fuse=1000
+sudo sysctl -w sedarwin.unsafe=1 sedarwin.hooks=0x10
+# wait for sedarwin.hooks to fall back to 0
+zprint | awk '/^MAC\.Labels/{print $7}'      # inuse, after
+```
+
+If the delta tracks the dispatch count, the mechanism is a label leak. If it is
+flat, the remaining explanation is contention — this hook lengthens the critical
+section under the name-cache lock while every core is resolving paths — which is
+rate- and concurrency-dependent rather than count-dependent, and needs a
+different probe.
 
 Clearing the slot from inside a dispatch of it is safe: the framework has
 already loaded the pointer for that call, and a CPU racing the store reads
