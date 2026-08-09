@@ -79,6 +79,14 @@ int sebsd_trace_enabled = 0;
  */
 static int sebsd_hooks_enabled = SEBSD_HOOK_DEFAULT;
 
+/*
+ * Second key for the hooks known to wedge the machine (SEBSD_HOOK_UNSAFE - see
+ * sebsd.h). Those bits are rejected unless this is set first, so a stray
+ * `sysctl sedarwin.hooks=0xff` cannot take the box down; deliberately
+ * investigating one still costs nothing but two sysctl writes.
+ */
+static int sebsd_unsafe_enabled = 0;
+
 /* Defined below; the sysctl handler needs it before its definition. */
 static void sebsd_install_hooks(struct mac_policy_ops *ops, int mask);
 
@@ -139,8 +147,14 @@ sebsd_sysctl_hooks_handler(struct sysctl_oid *oidp, void *arg1, int arg2,
 	if (error != 0 || req->newptr == 0) {
 		return error;   /* read, or a failed write */
 	}
-	if ((value & ~SEBSD_HOOK_ALL) != 0) {
+	if ((value & ~(SEBSD_HOOK_ALL | SEBSD_HOOK_UNSAFE)) != 0) {
 		return EINVAL;
+	}
+	if ((value & SEBSD_HOOK_UNSAFE) != 0 && !sebsd_unsafe_enabled) {
+		printf(SEBSD_TAG ": refusing hooks 0x%x: known to wedge the "
+		    "machine. Set sysctl sedarwin.unsafe=1 first.\n",
+		    value & SEBSD_HOOK_UNSAFE);
+		return EPERM;
 	}
 
 	sebsd_hooks_enabled = value;
@@ -162,17 +176,32 @@ static struct sysctl_oid sebsd_sysctl_hooks = {
 	.oid_version = SYSCTL_OID_VERSION,
 };
 
+static struct sysctl_oid sebsd_sysctl_unsafe = {
+	.oid_parent  = &sebsd_sysctl_children,
+	.oid_number  = OID_AUTO,
+	.oid_kind    = CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_OID2,
+	.oid_arg1    = &sebsd_unsafe_enabled,
+	.oid_arg2    = 0,
+	.oid_name    = "unsafe",
+	.oid_handler = sysctl_handle_int,
+	.oid_fmt     = "I",
+	.oid_descr   = "permit hooks known to wedge the machine",
+	.oid_version = SYSCTL_OID_VERSION,
+};
+
 static void
 sebsd_sysctl_register(void)
 {
 	sysctl_register_oid(&sebsd_sysctl_node);   /* parent first */
 	sysctl_register_oid(&sebsd_sysctl_trace);
 	sysctl_register_oid(&sebsd_sysctl_hooks);
+	sysctl_register_oid(&sebsd_sysctl_unsafe);
 }
 
 static void
 sebsd_sysctl_unregister(void)
 {
+	sysctl_unregister_oid(&sebsd_sysctl_unsafe);
 	sysctl_unregister_oid(&sebsd_sysctl_hooks);
 	sysctl_unregister_oid(&sebsd_sysctl_trace);
 	sysctl_unregister_oid(&sebsd_sysctl_node);

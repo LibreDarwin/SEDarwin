@@ -120,6 +120,12 @@ sebsd_vnode_check_rename(kauth_cred_t cred, struct vnode *fdvp,
 	return 0;
 }
 
+/*
+ * KNOWN BAD - installing this slot wedges the machine, even though the body
+ * below does nothing at all. See the SEBSD_HOOK_UNSAFE note in sebsd.h for the
+ * bisection that established it and the leading hypothesis. The bit is gated
+ * behind `sysctl sedarwin.unsafe=1`; do not install it casually.
+ */
 int
 sebsd_vnode_check_lookup(kauth_cred_t cred, struct vnode *dvp,
     struct label *dlabel, struct componentname *cnp)

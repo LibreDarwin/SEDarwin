@@ -60,10 +60,41 @@
 #define SEBSD_HOOK_EXEC_CHECK        0x00080000
 #define SEBSD_HOOK_EXEC_COMPLETE     0x00100000
 
+/*
+ * KNOWN BAD: mpo_vnode_check_lookup wedges the machine.
+ *
+ * Established by bisection on macOS 26.5.2 / xnu-12377.121.10, arm64e. With
+ * the policy live, `sysctl sedarwin.hooks=0xff` (all eight vnode checks) hangs
+ * the machine hard - no panic, no log. Enabling every other vnode hook is fine:
+ * 0x01 (open), 0xae (create/unlink/rename/readlink/setattrlist) and 0x40
+ * (getattr) each survive a workload that hammers them. Only 0x10 is left, so
+ * mpo_vnode_check_lookup is the one that kills it.
+ *
+ * Note the hook body is EMPTY when tracing is off - it tests a flag and returns
+ * 0. So the fault is not in what we do; it is in what the kernel does because
+ * the slot is non-NULL. Per dispatch the framework resolves the vnode's label
+ * and runs it through a zone-pointer validator whose failure path is a panic.
+ * mpo_vnode_check_lookup fires on every component of every path resolution, so
+ * it reaches that machinery orders of magnitude more often than the rest.
+ *
+ * The leading hypothesis - NOT yet proven - is lazy label allocation: a
+ * late-loaded policy means vnodes that predate it carry no label, and having a
+ * lookup hook installed forces the framework to allocate one from inside path
+ * resolution, under the caller's VFS locks. An allocation that has to reclaim
+ * re-enters VFS, which re-enters lookup. That would deadlock exactly like this,
+ * and silently. This policy registers with mpc_field_off = NULL (no label slot
+ * of its own), which is the first thing to revisit when picking this back up.
+ *
+ * Until that is understood, the bit is excluded from the group aliases below
+ * and gated behind `sysctl sedarwin.unsafe=1`, so it cannot be enabled by a
+ * stray 0xff.
+ */
+#define SEBSD_HOOK_UNSAFE       SEBSD_HOOK_VNODE_LOOKUP
+
 /* Convenience groupings (see README for the bisection procedure). */
 #define SEBSD_HOOK_VNODE_CHECK  (SEBSD_HOOK_VNODE_OPEN | SEBSD_HOOK_VNODE_CREATE | \
                                  SEBSD_HOOK_VNODE_UNLINK | SEBSD_HOOK_VNODE_RENAME | \
-                                 SEBSD_HOOK_VNODE_LOOKUP | SEBSD_HOOK_VNODE_READLINK | \
+                                 SEBSD_HOOK_VNODE_READLINK | \
                                  SEBSD_HOOK_VNODE_GETATTR | SEBSD_HOOK_VNODE_SETATTRLIST)
 #define SEBSD_HOOK_VNODE_LABEL  (SEBSD_HOOK_VNODE_LBL_EXTATTR | SEBSD_HOOK_VNODE_LBL_COPY)
 #define SEBSD_HOOK_FILE         (SEBSD_HOOK_FILE_MMAP | SEBSD_HOOK_FILE_LIBVAL)

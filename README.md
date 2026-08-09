@@ -156,6 +156,42 @@ question is always *which* hook, and answering it must not cost a rebuild:
 So `sedarwin.hooks=1` is now **only** `vnode_check_open`, not the whole vnode
 group. Bisect a bad group by halving: `0x0f`, then `0x03`, then `0x01`.
 
+#### `vnode_check_lookup` (0x10) is known bad
+
+Installing that one slot wedges the machine — hard hang, no panic, no log —
+**even though the hook body does nothing** when tracing is off. It is gated
+behind a second key so a stray `0xff` cannot take the box down:
+
+```sh
+sudo sysctl sedarwin.unsafe=1    # required first
+sudo sysctl sedarwin.hooks=0x10  # EPERM without the above
+```
+
+Established by bisection on macOS 26.5.2 / xnu-12377.121.10:
+
+| mask | hooks | result |
+|------|-------|--------|
+| `0x01` | open | survives |
+| `0xae` | create, unlink, rename, readlink, setattrlist | survives |
+| `0x40` | getattr | survives |
+| `0xff` | all eight | **freeze** |
+
+Every hook but `0x10` is exonerated, so `mpo_vnode_check_lookup` is the one.
+
+Since our body is empty, the fault is in what the *kernel* does because the slot
+is non-NULL: per dispatch it resolves the vnode's label and runs it through a
+zone-pointer validator whose failure path is `panic`. `vnode_check_lookup` fires
+on every component of every path resolution, reaching that machinery far more
+often than anything else.
+
+The leading hypothesis — **unproven** — is lazy label allocation. A late-loaded
+policy means vnodes predating it carry no label; a lookup hook forces the
+framework to allocate one from inside path resolution, under the caller's VFS
+locks. An allocation that needs to reclaim re-enters VFS, which re-enters
+lookup. That deadlocks exactly like this, and silently. This policy registers
+with `mpc_field_off = NULL` — no label slot of its own — which is the first
+thing to revisit.
+
 This works because the framework never copies the ops vector: it keeps the
 pointer handed to `mac_policy_register()` and re-reads the slot on every
 dispatch, treating NULL as "no opinion". Filling or clearing a slot on a live
