@@ -1,0 +1,231 @@
+/*-
+ * SEDarwin policy kext - internal umbrella header.
+ *
+ * Every kext translation unit includes this first. It pulls in the kernel
+ * headers in a fixed order that satisfies the kernel-private headers' own
+ * dependencies (user types before BSD headers, BSD before security/MAC), the
+ * BSD-style <sys/malloc.h> and <sys/sbuf.h> wrappers from libkern-bsd, and the
+ * hand-written MAC framework ABI (sebsd_mac.h).
+ *
+ * Logging is plain kernel printf() with a module tag; there is no syslog in
+ * the kernel, so the policy does not attempt openlog()/syslog().
+ */
+
+#ifndef _SEBSD_KERNEL_H_
+#define _SEBSD_KERNEL_H_
+
+#include <sys/types.h>
+#include <sys/cdefs.h>
+#include <sys/errno.h>
+#include <sys/param.h>
+#include <sys/ucred.h>
+#include <sys/systm.h>
+#include <libkern/libkern.h>
+
+#include <sys/malloc.h>
+#include <sys/sbuf.h>
+
+#include <sys/user.h>
+#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
+#include <sys/attr.h>
+#include <sys/mount.h>
+#include <sys/file.h>
+#include <sys/file_internal.h>
+#include <sys/proc.h>
+#include <sys/proc_internal.h>
+#include <sys/namei.h>
+#include <sys/socket.h>
+#include <sys/sysctl.h>
+#include <sys/mbuf.h>
+#include <sys/kauth.h>
+#include <sys/mount_internal.h>
+#include <sys/codesign.h>
+#include <sys/tty.h>
+
+#include <security/mac.h>
+#include <sedarwin/sebsd.h>
+#include <sedarwin/sebsd_mac.h>
+
+/*
+ * Hook implementations, grouped by subsystem. main.c wires them into
+ * struct mac_policy_ops. Declared here so every module can reference them.
+ */
+
+void    sebsd_policy_init(struct mac_policy_conf *mpc);
+void    sebsd_policy_initbsd(struct mac_policy_conf *mpc);
+void    sebsd_policy_destroy(struct mac_policy_conf *mpc);
+
+int     sebsd_vnode_check_open(kauth_cred_t cred, struct vnode *vp,
+            struct label *label, int acc_mode);
+int     sebsd_vnode_check_create(kauth_cred_t cred, struct vnode *dvp,
+            struct label *dlabel, struct componentname *cnp,
+            struct vnode_attr *vap);
+int     sebsd_vnode_check_unlink(kauth_cred_t cred, struct vnode *dvp,
+            struct label *dlabel, struct vnode *vp, struct label *label,
+            struct componentname *cnp);
+int     sebsd_vnode_check_rename(kauth_cred_t cred, struct vnode *fdvp,
+            struct label *fdlabel, struct vnode *fvp, struct label *flabel,
+            struct componentname *fcnp, struct vnode *tdvp,
+            struct label *tdlabel, struct vnode *tvp, struct label *tlabel,
+            struct componentname *tcnp);
+int     sebsd_vnode_check_lookup(kauth_cred_t cred, struct vnode *dvp,
+            struct label *dlabel, struct componentname *cnp);
+int     sebsd_vnode_check_readlink(kauth_cred_t cred, struct vnode *vp,
+            struct label *label);
+int     sebsd_vnode_check_getattr(kauth_cred_t active_cred,
+            kauth_cred_t file_cred, struct vnode *vp, struct label *vlabel,
+            struct vnode_attr *va);
+int     sebsd_vnode_check_setattrlist(kauth_cred_t cred, struct vnode *vp,
+            struct label *vlabel, struct attrlist *alist);
+int     sebsd_vnode_label_associate_extattr(struct mount *mp,
+            struct label *mntlabel, struct vnode *vp, struct label *vlabel);
+void    sebsd_vnode_label_copy(struct label *src, struct label *dest);
+
+int     sebsd_file_check_mmap(kauth_cred_t cred, struct fileglob *fg,
+            struct label *label, int prot, int flags, uint64_t file_pos,
+            int *maxprot);
+int     sebsd_file_check_library_validation(struct proc *p,
+            struct fileglob *fg, off_t slice_offset, user_long_t error_message,
+            size_t error_message_size);
+
+int     sebsd_proc_check_signal(kauth_cred_t cred, proc_ident_t instigator,
+            proc_ident_t target, int signum);
+int     sebsd_proc_check_fork(kauth_cred_t cred, struct proc *proc);
+void    sebsd_proc_notify_exit(struct proc *proc);
+
+/* Process execution (spawn/exec) and code-signing observation. */
+int     sebsd_spawn_check_exec(kauth_cred_t cred, struct vnode *vp,
+            struct vnode *scriptvp, struct label *vnodelabel,
+            struct label *scriptlabel, struct label *execlabel,
+            struct componentname *cnp, u_int *csflags, void *macpolicyattr,
+            size_t macpolicyattrlen);
+void    sebsd_spawn_notify_exec_complete(struct proc *p);
+
+/* In-memory Mach-O header inspection (thin/fat, CPU, LC_CODE_SIGNATURE). */
+struct sebsd_macho_info {
+	int     m_cputype;
+	int     m_cpusubtype;
+	int     m_ncmds;
+	int     m_fat;          /* 1 if a fat binary was detected */
+	int     m_codesign;     /* 1 if LC_CODE_SIGNATURE present */
+};
+int     sebsd_macho_info(const void *data, size_t len,
+            struct sebsd_macho_info *info);
+void    sebsd_macho_selftest(void);
+
+int     sebsd_socket_check_connect(kauth_cred_t cred, socket_t so,
+            struct label *socklabel, struct sockaddr *addr);
+int     sebsd_socket_check_create(kauth_cred_t cred, int domain, int type,
+            int protocol);
+int     sebsd_socket_check_listen(kauth_cred_t cred, socket_t so,
+            struct label *socklabel);
+
+void    sebsd_pty_notify_grant(proc_t p, struct tty *tp, dev_t dev,
+            struct label *label);
+
+/*
+ * Logging. Kernel printf() is the only sink; every message carries the
+ * SEBSD_TAG prefix so kextstat/dmesg/streams of the console are greppable.
+ *
+ * There are two levels:
+ *   sebsd_log()          - lifecycle events only (register/init/destroy),
+ *                          always emitted, once per load at most.
+ *   sebsd_log_debug()    - per-event traces (open/exec/signal/connect/...).
+ *                          These sit on hot kernel paths (every open() and
+ *                          exec() on the system), so they are gated behind the
+ *                          runtime `sebsd_trace_enabled` flag (sysctl
+ *                          sedarwin.trace), OFF by default. Do not print or do
+ *                          VFS work unconditionally in a per-event hook.
+ */
+#define SEBSD_TAG "SEDarwin"
+
+#ifndef SEBSD_LOGGING
+#define SEBSD_LOGGING 1
+#endif
+
+/* Runtime gate for per-event trace lines; set via `sysctl sedarwin.trace`. */
+extern int sebsd_trace_enabled;
+
+#if SEBSD_LOGGING
+#define sebsd_log(fmt, ...) \
+    printf(SEBSD_TAG ": " fmt "\n", ##__VA_ARGS__)
+#define sebsd_log_debug(fmt, ...) \
+    do { \
+        if (__builtin_expect(sebsd_trace_enabled, 0)) { \
+            printf(SEBSD_TAG ": debug: " fmt "\n", ##__VA_ARGS__); \
+        } \
+    } while (0)
+#else
+#define sebsd_log(fmt, ...) do {} while (0)
+#define sebsd_log_debug(fmt, ...) do {} while (0)
+#endif
+
+/*
+ * Trace gate. Every per-event hook must test this FIRST and return immediately
+ * when it is off, before gathering any subject identification. Formatting the
+ * arguments is not free, and proc_name() in particular is not merely slow (see
+ * sebsd_proc_name()) - leaving it on the unconditional path would put a lock
+ * acquisition on every open()/exec()/signal/connect on the system even with
+ * tracing disabled, which is the opposite of what the gate is for.
+ */
+static inline int
+sebsd_tracing(void)
+{
+	return __builtin_expect(sebsd_trace_enabled != 0, 0) != 0;
+}
+
+/*
+ * Cheap subject identification for trace lines: the running process's pid and
+ * name.
+ *
+ * proc_selfname() reads p_comm straight off current_proc() and takes no locks.
+ * proc_name(pid) does NOT: it resolves the pid through proc_find(), which takes
+ * proc_list_lock. MAC hooks fire from contexts that may already hold it (signal
+ * delivery, proc exit), so the current-process helper must never go that route.
+ */
+static inline int
+sebsd_cur_pid(void)
+{
+	return proc_pid(current_proc());
+}
+
+static inline void
+sebsd_cur_name(char *buf, size_t len)
+{
+	proc_selfname(buf, (int)len);
+}
+
+/*
+ * Name of some OTHER process, by pid. This one does go through proc_find() and
+ * therefore takes proc_list_lock - only ever call it from behind
+ * sebsd_tracing(), i.e. when an operator has explicitly asked for traces.
+ */
+static inline void
+sebsd_proc_name(int pid, char *buf, size_t len)
+{
+	proc_name(pid, buf, (int)len);
+}
+
+/*
+ * Copy a lookup component into a caller buffer, NUL-terminating it. cn_nameptr
+ * is not guaranteed NUL-terminated; cn_namelen is authoritative.
+ */
+static inline void
+sebsd_cnp_name(struct componentname *cnp, char *buf, size_t len)
+{
+	size_t n;
+
+	if (cnp == NULL || cnp->cn_nameptr == NULL) {
+		strlcpy(buf, "<none>", len);
+		return;
+	}
+	n = (size_t)cnp->cn_namelen;
+	if (n >= len) {
+		n = len - 1;
+	}
+	memcpy(buf, cnp->cn_nameptr, n);
+	buf[n] = '\0';
+}
+
+#endif /* _SEBSD_KERNEL_H_ */

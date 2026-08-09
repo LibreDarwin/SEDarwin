@@ -1,0 +1,103 @@
+#!/bin/sh
+#
+# sedarwin-load - boot-time loader for the SEDarwin MAC policy kext.
+#
+# Run by the com.beako.sedarwin LaunchDaemon at boot (RunAtLoad), one-shot.
+#
+# WHY THIS EXISTS: being present in /Library/Extensions - and even being
+# prelinked into the auxiliary kernel collection - does not get a kext STARTED.
+# The auxKC only maps it; something has to ask kernelmanagement to load it. The
+# IOKitPersonalities/IOResources entry in Info.plist is not enough on its own
+# (verified on macOS 26.5.2: sedarwin sat prelinked in the auxKC across a full
+# boot without its _start ever running). The procfs/sysfs siblings have the same
+# personality and are likewise loaded by a LaunchDaemon at boot, not by IOKit
+# matching. This script is that daemon.
+#
+# Auto-load is gated behind an arm flag so a fault in kernel code cannot
+# boot-loop the machine: nothing happens until an operator runs
+#     sudo touch /var/db/sedarwin.enabled
+# Remove that file to disable auto-load again. This mirrors the procfs
+# (/var/db/procfs.enabled) and sysfs (/var/db/sysfs.enabled) siblings.
+#
+# The gate matters more here than for the filesystem siblings: this kext
+# registers a MAC policy, so its hooks sit on every open/exec/signal/connect on
+# the system from the moment it loads.
+#
+set -u
+
+ARM_FLAG="/var/db/sedarwin.enabled"
+KEXT="/Library/Extensions/sedarwin.kext"
+BUNDLE_ID="com.beako.security.sedarwin"
+TRIES=30
+
+log() { echo "sedarwin-load: $*"; }
+
+kext_loaded() {
+    kmutil showloaded 2>/dev/null | grep -q "$BUNDLE_ID"
+}
+
+if [ ! -e "$ARM_FLAG" ]; then
+    log "disarmed ($ARM_FLAG absent); not loading. Arm with: sudo touch $ARM_FLAG"
+    exit 0
+fi
+
+if [ ! -d "$KEXT" ]; then
+    log "$KEXT is not installed; nothing to load."
+    exit 1
+fi
+
+# Load by path rather than by bundle id - the reliable route at boot - and poll
+# until the kext actually shows up, retrying in case kernelmanagement was not
+# ready on the first attempt.
+#
+# Retry only helps for transient "not ready yet" failures. A missing user
+# approval is NOT transient: it needs a human in System Settings and then a
+# reboot, and hammering kmutil 30 times at boot only buries the real message.
+# Bail out on it immediately with something actionable.
+i=0
+while [ "$i" -lt "$TRIES" ]; do
+    if kext_loaded; then
+        break
+    fi
+    log "loading kext $KEXT (attempt $((i + 1)))"
+    out=$(kmutil load -p "$KEXT" 2>&1)
+    [ -n "$out" ] && log "kmutil load: $out"
+
+    case "$out" in
+    *"not approved"*|*"approve using System Settings"*)
+        log ""
+        log "NOT APPROVED - this is a one-time, manual step:"
+        log "  1. System Settings > Privacy & Security, allow system software"
+        log "     from \"Apple Development: sunnevanattsol@gmail.com\"."
+        log "  2. Reboot. Approval only takes effect once the auxiliary kernel"
+        log "     collection is rebuilt, which happens at boot."
+        log "Note that a REBUILT kext needs this dance again: its cdhash"
+        log "changed, so the standing approval no longer covers it."
+        exit 1
+        ;;
+    esac
+
+    kext_loaded && break
+    i=$((i + 1))
+    sleep 1
+done
+
+if ! kext_loaded; then
+    log "kext did not load after ${TRIES}s; giving up (needs approval in"
+    log "System Settings > Privacy & Security, or a rebuilt/installed kext)."
+    exit 1
+fi
+
+log "loaded $BUNDLE_ID"
+
+# The policy registers with per-event tracing OFF; the sysctl only exists once
+# _start has run, so this doubles as confirmation that registration succeeded.
+if sysctl -n sedarwin.trace >/dev/null 2>&1; then
+    log "policy registered (sedarwin.trace=$(sysctl -n sedarwin.trace))"
+else
+    log "WARNING: kext loaded but sysctl sedarwin.trace is absent -"
+    log "mac_policy_register() may have failed; check the kernel log."
+    exit 1
+fi
+
+exit 0
