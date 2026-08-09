@@ -208,6 +208,17 @@ sebsd_proc_name(int pid, char *buf, size_t len)
 }
 
 /*
+ * Cap for name buffers in trace lines. Deliberately far below NAME_MAX: these
+ * buffers land on the KERNEL stack (16K, and MAC hooks fire deep inside VFS
+ * recursion), so a NAME_MAX+1 buffer per hook is not affordable - a rename
+ * hook alone would carry half a kilobyte. Trace output is diagnostic, so
+ * truncating a long component is the right trade. Note the build sets
+ * -fno-stack-check -fno-stack-protector, so an overflow here would not trap;
+ * it would silently corrupt whatever lies below the stack.
+ */
+#define SEBSD_TRACE_NAME_MAX    64
+
+/*
  * Copy a lookup component into a caller buffer, NUL-terminating it. cn_nameptr
  * is not guaranteed NUL-terminated; cn_namelen is authoritative.
  */

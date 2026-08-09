@@ -128,20 +128,33 @@ at runtime:
 
 ```sh
 sysctl sedarwin.hooks            # 0 on a fresh load
-sudo sysctl sedarwin.hooks=1     # + vnode checks
-sudo sysctl sedarwin.hooks=3     # + vnode label hooks
+sudo sysctl sedarwin.hooks=1     # + vnode_check_open only
 sudo sysctl sedarwin.hooks=0     # back to inert
 ```
 
-| bit | group | hooks |
-|-----|-------|-------|
-| 0x01 | vnode checks | open, create, unlink, rename, lookup, readlink, getattr, setattrlist |
-| 0x02 | vnode labels | label_associate_extattr, label_copy |
-| 0x04 | file | mmap, library validation |
-| 0x08 | proc | signal, fork, exit |
-| 0x10 | socket | connect, create, listen |
-| 0x20 | pty | pty grant |
-| 0x40 | exec | vnode_check_exec, exec_complete |
+A hook that wedges the machine leaves no log behind, so record what you set
+*before* setting it. The mask does not persist across a load — a fresh load is
+always back to 0.
+
+One bit per **hook**, not per group — when a group wedges the machine the next
+question is always *which* hook, and answering it must not cost a rebuild:
+
+| bit | hook | | bit | hook |
+|-----|------|-|-----|------|
+| 0x000001 | vnode_check_open | | 0x000800 | file_check_library_validation |
+| 0x000002 | vnode_check_create | | 0x001000 | proc_check_signal |
+| 0x000004 | vnode_check_unlink | | 0x002000 | proc_check_fork |
+| 0x000008 | vnode_check_rename | | 0x004000 | proc_notify_exit |
+| 0x000010 | vnode_check_lookup | | 0x008000 | socket_check_connect |
+| 0x000020 | vnode_check_readlink | | 0x010000 | socket_check_create |
+| 0x000040 | vnode_check_getattr | | 0x020000 | socket_check_listen |
+| 0x000080 | vnode_check_setattrlist | | 0x040000 | pty_notify_grant |
+| 0x000100 | vnode_label_associate_extattr | | 0x080000 | vnode_check_exec |
+| 0x000200 | vnode_label_copy | | 0x100000 | proc_notify_exec_complete |
+| 0x000400 | file_check_mmap | | | |
+
+So `sedarwin.hooks=1` is now **only** `vnode_check_open`, not the whole vnode
+group. Bisect a bad group by halving: `0x0f`, then `0x03`, then `0x01`.
 
 This works because the framework never copies the ops vector: it keeps the
 pointer handed to `mac_policy_register()` and re-reads the slot on every

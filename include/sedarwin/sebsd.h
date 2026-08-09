@@ -34,13 +34,45 @@
  *
  * Start at 0, add one group, exercise the machine, repeat.
  */
-#define SEBSD_HOOK_VNODE_CHECK  0x0001  /* open/create/unlink/rename/lookup... */
-#define SEBSD_HOOK_VNODE_LABEL  0x0002  /* label_associate_extattr, label_copy */
-#define SEBSD_HOOK_FILE         0x0004  /* mmap, library validation           */
-#define SEBSD_HOOK_PROC         0x0008  /* signal, fork, exit                 */
-#define SEBSD_HOOK_SOCKET       0x0010  /* connect, create, listen            */
-#define SEBSD_HOOK_PTY          0x0020  /* pty grant                          */
-#define SEBSD_HOOK_EXEC         0x0040  /* vnode_check_exec, exec_complete    */
+/*
+ * One bit per hook, not per group: when a group wedges the machine, the next
+ * question is always *which* hook, and answering it must not cost a rebuild.
+ */
+#define SEBSD_HOOK_VNODE_OPEN        0x00000001
+#define SEBSD_HOOK_VNODE_CREATE      0x00000002
+#define SEBSD_HOOK_VNODE_UNLINK      0x00000004
+#define SEBSD_HOOK_VNODE_RENAME      0x00000008
+#define SEBSD_HOOK_VNODE_LOOKUP      0x00000010
+#define SEBSD_HOOK_VNODE_READLINK    0x00000020
+#define SEBSD_HOOK_VNODE_GETATTR     0x00000040
+#define SEBSD_HOOK_VNODE_SETATTRLIST 0x00000080
+#define SEBSD_HOOK_VNODE_LBL_EXTATTR 0x00000100
+#define SEBSD_HOOK_VNODE_LBL_COPY    0x00000200
+#define SEBSD_HOOK_FILE_MMAP         0x00000400
+#define SEBSD_HOOK_FILE_LIBVAL       0x00000800
+#define SEBSD_HOOK_PROC_SIGNAL       0x00001000
+#define SEBSD_HOOK_PROC_FORK         0x00002000
+#define SEBSD_HOOK_PROC_EXIT         0x00004000
+#define SEBSD_HOOK_SOCKET_CONNECT    0x00008000
+#define SEBSD_HOOK_SOCKET_CREATE     0x00010000
+#define SEBSD_HOOK_SOCKET_LISTEN     0x00020000
+#define SEBSD_HOOK_PTY_GRANT         0x00040000
+#define SEBSD_HOOK_EXEC_CHECK        0x00080000
+#define SEBSD_HOOK_EXEC_COMPLETE     0x00100000
+
+/* Convenience groupings (see README for the bisection procedure). */
+#define SEBSD_HOOK_VNODE_CHECK  (SEBSD_HOOK_VNODE_OPEN | SEBSD_HOOK_VNODE_CREATE | \
+                                 SEBSD_HOOK_VNODE_UNLINK | SEBSD_HOOK_VNODE_RENAME | \
+                                 SEBSD_HOOK_VNODE_LOOKUP | SEBSD_HOOK_VNODE_READLINK | \
+                                 SEBSD_HOOK_VNODE_GETATTR | SEBSD_HOOK_VNODE_SETATTRLIST)
+#define SEBSD_HOOK_VNODE_LABEL  (SEBSD_HOOK_VNODE_LBL_EXTATTR | SEBSD_HOOK_VNODE_LBL_COPY)
+#define SEBSD_HOOK_FILE         (SEBSD_HOOK_FILE_MMAP | SEBSD_HOOK_FILE_LIBVAL)
+#define SEBSD_HOOK_PROC         (SEBSD_HOOK_PROC_SIGNAL | SEBSD_HOOK_PROC_FORK | \
+                                 SEBSD_HOOK_PROC_EXIT)
+#define SEBSD_HOOK_SOCKET       (SEBSD_HOOK_SOCKET_CONNECT | SEBSD_HOOK_SOCKET_CREATE | \
+                                 SEBSD_HOOK_SOCKET_LISTEN)
+#define SEBSD_HOOK_PTY          SEBSD_HOOK_PTY_GRANT
+#define SEBSD_HOOK_EXEC         (SEBSD_HOOK_EXEC_CHECK | SEBSD_HOOK_EXEC_COMPLETE)
 
 #define SEBSD_HOOK_ALL          (SEBSD_HOOK_VNODE_CHECK | SEBSD_HOOK_VNODE_LABEL | \
                                  SEBSD_HOOK_FILE | SEBSD_HOOK_PROC | \

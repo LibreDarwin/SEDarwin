@@ -212,33 +212,33 @@ sebsd_install_lifecycle(struct mac_policy_ops *ops)
 static void
 sebsd_install_hooks(struct mac_policy_ops *ops, int mask)
 {
-	ops->mpo_vnode_check_open                = (mask & SEBSD_HOOK_VNODE_CHECK) ? sebsd_vnode_check_open : NULL;
-	ops->mpo_vnode_check_create              = (mask & SEBSD_HOOK_VNODE_CHECK) ? sebsd_vnode_check_create : NULL;
-	ops->mpo_vnode_check_unlink              = (mask & SEBSD_HOOK_VNODE_CHECK) ? sebsd_vnode_check_unlink : NULL;
-	ops->mpo_vnode_check_rename              = (mask & SEBSD_HOOK_VNODE_CHECK) ? sebsd_vnode_check_rename : NULL;
-	ops->mpo_vnode_check_lookup              = (mask & SEBSD_HOOK_VNODE_CHECK) ? sebsd_vnode_check_lookup : NULL;
-	ops->mpo_vnode_check_readlink            = (mask & SEBSD_HOOK_VNODE_CHECK) ? sebsd_vnode_check_readlink : NULL;
-	ops->mpo_vnode_check_getattr             = (mask & SEBSD_HOOK_VNODE_CHECK) ? sebsd_vnode_check_getattr : NULL;
-	ops->mpo_vnode_check_setattrlist         = (mask & SEBSD_HOOK_VNODE_CHECK) ? sebsd_vnode_check_setattrlist : NULL;
+	ops->mpo_vnode_check_open                = (mask & SEBSD_HOOK_VNODE_OPEN) ? sebsd_vnode_check_open : NULL;
+	ops->mpo_vnode_check_create              = (mask & SEBSD_HOOK_VNODE_CREATE) ? sebsd_vnode_check_create : NULL;
+	ops->mpo_vnode_check_unlink              = (mask & SEBSD_HOOK_VNODE_UNLINK) ? sebsd_vnode_check_unlink : NULL;
+	ops->mpo_vnode_check_rename              = (mask & SEBSD_HOOK_VNODE_RENAME) ? sebsd_vnode_check_rename : NULL;
+	ops->mpo_vnode_check_lookup              = (mask & SEBSD_HOOK_VNODE_LOOKUP) ? sebsd_vnode_check_lookup : NULL;
+	ops->mpo_vnode_check_readlink            = (mask & SEBSD_HOOK_VNODE_READLINK) ? sebsd_vnode_check_readlink : NULL;
+	ops->mpo_vnode_check_getattr             = (mask & SEBSD_HOOK_VNODE_GETATTR) ? sebsd_vnode_check_getattr : NULL;
+	ops->mpo_vnode_check_setattrlist         = (mask & SEBSD_HOOK_VNODE_SETATTRLIST) ? sebsd_vnode_check_setattrlist : NULL;
 
-	ops->mpo_vnode_label_associate_extattr   = (mask & SEBSD_HOOK_VNODE_LABEL) ? sebsd_vnode_label_associate_extattr : NULL;
-	ops->mpo_vnode_label_copy                = (mask & SEBSD_HOOK_VNODE_LABEL) ? sebsd_vnode_label_copy : NULL;
+	ops->mpo_vnode_label_associate_extattr   = (mask & SEBSD_HOOK_VNODE_LBL_EXTATTR) ? sebsd_vnode_label_associate_extattr : NULL;
+	ops->mpo_vnode_label_copy                = (mask & SEBSD_HOOK_VNODE_LBL_COPY) ? sebsd_vnode_label_copy : NULL;
 
-	ops->mpo_file_check_mmap                 = (mask & SEBSD_HOOK_FILE) ? sebsd_file_check_mmap : NULL;
-	ops->mpo_file_check_library_validation   = (mask & SEBSD_HOOK_FILE) ? sebsd_file_check_library_validation : NULL;
+	ops->mpo_file_check_mmap                 = (mask & SEBSD_HOOK_FILE_MMAP) ? sebsd_file_check_mmap : NULL;
+	ops->mpo_file_check_library_validation   = (mask & SEBSD_HOOK_FILE_LIBVAL) ? sebsd_file_check_library_validation : NULL;
 
-	ops->mpo_proc_check_signal               = (mask & SEBSD_HOOK_PROC) ? sebsd_proc_check_signal : NULL;
-	ops->mpo_proc_check_fork                 = (mask & SEBSD_HOOK_PROC) ? sebsd_proc_check_fork : NULL;
-	ops->mpo_proc_notify_exit                = (mask & SEBSD_HOOK_PROC) ? sebsd_proc_notify_exit : NULL;
+	ops->mpo_proc_check_signal               = (mask & SEBSD_HOOK_PROC_SIGNAL) ? sebsd_proc_check_signal : NULL;
+	ops->mpo_proc_check_fork                 = (mask & SEBSD_HOOK_PROC_FORK) ? sebsd_proc_check_fork : NULL;
+	ops->mpo_proc_notify_exit                = (mask & SEBSD_HOOK_PROC_EXIT) ? sebsd_proc_notify_exit : NULL;
 
-	ops->mpo_socket_check_connect            = (mask & SEBSD_HOOK_SOCKET) ? sebsd_socket_check_connect : NULL;
-	ops->mpo_socket_check_create             = (mask & SEBSD_HOOK_SOCKET) ? sebsd_socket_check_create : NULL;
-	ops->mpo_socket_check_listen             = (mask & SEBSD_HOOK_SOCKET) ? sebsd_socket_check_listen : NULL;
+	ops->mpo_socket_check_connect            = (mask & SEBSD_HOOK_SOCKET_CONNECT) ? sebsd_socket_check_connect : NULL;
+	ops->mpo_socket_check_create             = (mask & SEBSD_HOOK_SOCKET_CREATE) ? sebsd_socket_check_create : NULL;
+	ops->mpo_socket_check_listen             = (mask & SEBSD_HOOK_SOCKET_LISTEN) ? sebsd_socket_check_listen : NULL;
 
-	ops->mpo_pty_notify_grant                = (mask & SEBSD_HOOK_PTY) ? sebsd_pty_notify_grant : NULL;
+	ops->mpo_pty_notify_grant                = (mask & SEBSD_HOOK_PTY_GRANT) ? sebsd_pty_notify_grant : NULL;
 
-	ops->mpo_vnode_check_exec                = (mask & SEBSD_HOOK_EXEC) ? sebsd_spawn_check_exec : NULL;
-	ops->mpo_proc_notify_exec_complete       = (mask & SEBSD_HOOK_EXEC) ? sebsd_spawn_notify_exec_complete : NULL;
+	ops->mpo_vnode_check_exec                = (mask & SEBSD_HOOK_EXEC_CHECK) ? sebsd_spawn_check_exec : NULL;
+	ops->mpo_proc_notify_exec_complete       = (mask & SEBSD_HOOK_EXEC_COMPLETE) ? sebsd_spawn_notify_exec_complete : NULL;
 }
 
 void

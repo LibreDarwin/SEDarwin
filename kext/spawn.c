@@ -58,6 +58,19 @@ sebsd_csflag_bits(u_int flags, char *buf, size_t len)
 	return buf;
 }
 
+/* Buffers live here, not in the hook: see the note at the top of vnode.c. */
+static void __attribute__((noinline))
+sebsd_trace_exec(kauth_cred_t cred, u_int flags)
+{
+	char pname[MAXCOMLEN + 1];
+	char sig[32];
+
+	sebsd_cur_name(pname, sizeof(pname));
+	sebsd_csflag_bits(flags, sig, sizeof(sig));
+	sebsd_log_debug("exec: %s pid=%d uid=%d cs=0x%x(%s)", pname,
+	    sebsd_cur_pid(), kauth_cred_getuid(cred), flags, sig);
+}
+
 int
 sebsd_spawn_check_exec(kauth_cred_t cred, struct vnode *vp,
     struct vnode *scriptvp, struct label *vnodelabel,
@@ -65,10 +78,6 @@ sebsd_spawn_check_exec(kauth_cred_t cred, struct vnode *vp,
     struct componentname *cnp, u_int *csflags, void *macpolicyattr,
     size_t macpolicyattrlen)
 {
-	char pname[MAXCOMLEN + 1];
-	char sig[32];
-	u_int flags = csflags != NULL ? *csflags : 0;
-
 	(void)vp;
 	(void)scriptvp;
 	(void)vnodelabel;
@@ -78,13 +87,9 @@ sebsd_spawn_check_exec(kauth_cred_t cred, struct vnode *vp,
 	(void)macpolicyattr;
 	(void)macpolicyattrlen;
 
-	if (!sebsd_tracing()) {
-		return 0;
+	if (sebsd_tracing()) {
+		sebsd_trace_exec(cred, csflags != NULL ? *csflags : 0);
 	}
-	sebsd_cur_name(pname, sizeof(pname));
-	sebsd_csflag_bits(flags, sig, sizeof(sig));
-	sebsd_log_debug("exec: %s pid=%d uid=%d cs=0x%x(%s)", pname,
-	    sebsd_cur_pid(), kauth_cred_getuid(cred), flags, sig);
 	return 0;
 }
 

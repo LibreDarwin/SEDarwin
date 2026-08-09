@@ -11,44 +11,62 @@
  * re-locks the same vnode and deadlocks the machine - no panic, just a hard
  * freeze. The trace is limited to pid/name/type/op; recovering paths is a
  * userland problem.
+ *
+ * Every hook is split in two: a tiny entry point that tests the trace gate and
+ * returns, and a noinline helper holding the character buffers. These hooks sit
+ * on the KERNEL stack inside VFS recursion, and the compiler reserves a
+ * function's whole frame on entry - so buffers declared in the entry point
+ * would be paid for on every open/lookup/getattr on the system even with
+ * tracing off. Keeping them in the helper keeps the hot path's frame minimal.
  */
 
 #include "kernel.h"
+
+static void __attribute__((noinline))
+sebsd_trace_open(kauth_cred_t cred, int acc_mode)
+{
+	char pname[MAXCOMLEN + 1];
+
+	sebsd_cur_name(pname, sizeof(pname));
+	sebsd_log_debug("vnode open: %s pid=%d uid=%d mode=0x%x", pname,
+	    sebsd_cur_pid(), kauth_cred_getuid(cred), acc_mode);
+}
 
 int
 sebsd_vnode_check_open(kauth_cred_t cred, struct vnode *vp,
     struct label *label, int acc_mode)
 {
-	char pname[MAXCOMLEN + 1];
-
 	(void)vp;
 	(void)label;
-	if (!sebsd_tracing()) {
-		return 0;
+	if (sebsd_tracing()) {
+		sebsd_trace_open(cred, acc_mode);
 	}
-	sebsd_cur_name(pname, sizeof(pname));
-	sebsd_log_debug("vnode open: %s pid=%d uid=%d mode=0x%x", pname,
-	    sebsd_cur_pid(), kauth_cred_getuid(cred), acc_mode);
 	return 0;
+}
+
+static void __attribute__((noinline))
+sebsd_trace_component(const char *op, kauth_cred_t cred,
+    struct componentname *cnp)
+{
+	char pname[MAXCOMLEN + 1];
+	char name[SEBSD_TRACE_NAME_MAX];
+
+	sebsd_cur_name(pname, sizeof(pname));
+	sebsd_cnp_name(cnp, name, sizeof(name));
+	sebsd_log_debug("vnode %s: %s pid=%d name=%s uid=%d", op, pname,
+	    sebsd_cur_pid(), name, kauth_cred_getuid(cred));
 }
 
 int
 sebsd_vnode_check_create(kauth_cred_t cred, struct vnode *dvp,
     struct label *dlabel, struct componentname *cnp, struct vnode_attr *vap)
 {
-	char pname[MAXCOMLEN + 1];
-	char name[NAME_MAX + 1];
-
 	(void)dvp;
 	(void)dlabel;
 	(void)vap;
-	if (!sebsd_tracing()) {
-		return 0;
+	if (sebsd_tracing()) {
+		sebsd_trace_component("create", cred, cnp);
 	}
-	sebsd_cur_name(pname, sizeof(pname));
-	sebsd_cnp_name(cnp, name, sizeof(name));
-	sebsd_log_debug("vnode create: %s pid=%d name=%s uid=%d", pname,
-	    sebsd_cur_pid(), name, kauth_cred_getuid(cred));
 	return 0;
 }
 
@@ -57,21 +75,29 @@ sebsd_vnode_check_unlink(kauth_cred_t cred, struct vnode *dvp,
     struct label *dlabel, struct vnode *vp, struct label *label,
     struct componentname *cnp)
 {
-	char pname[MAXCOMLEN + 1];
-	char name[NAME_MAX + 1];
-
 	(void)dvp;
 	(void)dlabel;
 	(void)vp;
 	(void)label;
-	if (!sebsd_tracing()) {
-		return 0;
+	if (sebsd_tracing()) {
+		sebsd_trace_component("unlink", cred, cnp);
 	}
-	sebsd_cur_name(pname, sizeof(pname));
-	sebsd_cnp_name(cnp, name, sizeof(name));
-	sebsd_log_debug("vnode unlink: %s pid=%d name=%s uid=%d", pname,
-	    sebsd_cur_pid(), name, kauth_cred_getuid(cred));
 	return 0;
+}
+
+static void __attribute__((noinline))
+sebsd_trace_rename(kauth_cred_t cred, struct componentname *fcnp,
+    struct componentname *tcnp)
+{
+	char pname[MAXCOMLEN + 1];
+	char from[SEBSD_TRACE_NAME_MAX];
+	char to[SEBSD_TRACE_NAME_MAX];
+
+	sebsd_cur_name(pname, sizeof(pname));
+	sebsd_cnp_name(fcnp, from, sizeof(from));
+	sebsd_cnp_name(tcnp, to, sizeof(to));
+	sebsd_log_debug("vnode rename: %s pid=%d %s -> %s uid=%d", pname,
+	    sebsd_cur_pid(), from, to, kauth_cred_getuid(cred));
 }
 
 int
@@ -80,10 +106,6 @@ sebsd_vnode_check_rename(kauth_cred_t cred, struct vnode *fdvp,
     struct componentname *fcnp, struct vnode *tdvp, struct label *tdlabel,
     struct vnode *tvp, struct label *tlabel, struct componentname *tcnp)
 {
-	char pname[MAXCOMLEN + 1];
-	char from[NAME_MAX + 1];
-	char to[NAME_MAX + 1];
-
 	(void)fdvp;
 	(void)fdlabel;
 	(void)fvp;
@@ -92,14 +114,9 @@ sebsd_vnode_check_rename(kauth_cred_t cred, struct vnode *fdvp,
 	(void)tdlabel;
 	(void)tvp;
 	(void)tlabel;
-	if (!sebsd_tracing()) {
-		return 0;
+	if (sebsd_tracing()) {
+		sebsd_trace_rename(cred, fcnp, tcnp);
 	}
-	sebsd_cur_name(pname, sizeof(pname));
-	sebsd_cnp_name(fcnp, from, sizeof(from));
-	sebsd_cnp_name(tcnp, to, sizeof(to));
-	sebsd_log_debug("vnode rename: %s pid=%d %s -> %s uid=%d", pname,
-	    sebsd_cur_pid(), from, to, kauth_cred_getuid(cred));
 	return 0;
 }
 
