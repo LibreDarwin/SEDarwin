@@ -72,6 +72,15 @@ int     sebsd_vnode_check_rename(kauth_cred_t cred, struct vnode *fdvp,
             struct componentname *tcnp);
 int     sebsd_vnode_check_lookup(kauth_cred_t cred, struct vnode *dvp,
             struct label *dlabel, struct componentname *cnp);
+
+/*
+ * Instrumentation for the quarantined lookup hook (see vnode.c). The counter
+ * and fuse are exported through sysctl by main.c, which also owns the ops
+ * vector and so provides the "uninstall myself" call.
+ */
+extern unsigned int sebsd_lookup_count;
+extern int          sebsd_lookup_fuse;
+void    sebsd_hooks_blow_lookup_fuse(void);
 int     sebsd_vnode_check_readlink(kauth_cred_t cred, struct vnode *vp,
             struct label *label);
 int     sebsd_vnode_check_getattr(kauth_cred_t active_cred,

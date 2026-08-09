@@ -176,6 +176,44 @@ static struct sysctl_oid sebsd_sysctl_hooks = {
 	.oid_version = SYSCTL_OID_VERSION,
 };
 
+/*
+ * Called by the lookup hook itself once it has burned through its fuse. Clears
+ * only that slot and drops the bit from the live mask, so `sysctl
+ * sedarwin.hooks` afterwards reports what is actually installed.
+ */
+void
+sebsd_hooks_blow_lookup_fuse(void)
+{
+	sebsd_ops.mpo_vnode_check_lookup = NULL;
+	sebsd_hooks_enabled &= ~SEBSD_HOOK_VNODE_LOOKUP;
+}
+
+static struct sysctl_oid sebsd_sysctl_lookup_count = {
+	.oid_parent  = &sebsd_sysctl_children,
+	.oid_number  = OID_AUTO,
+	.oid_kind    = CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_OID2,
+	.oid_arg1    = &sebsd_lookup_count,
+	.oid_arg2    = 0,
+	.oid_name    = "lookup_count",
+	.oid_handler = sysctl_handle_int,
+	.oid_fmt     = "IU",
+	.oid_descr   = "dispatches seen by the quarantined lookup hook",
+	.oid_version = SYSCTL_OID_VERSION,
+};
+
+static struct sysctl_oid sebsd_sysctl_lookup_fuse = {
+	.oid_parent  = &sebsd_sysctl_children,
+	.oid_number  = OID_AUTO,
+	.oid_kind    = CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_OID2,
+	.oid_arg1    = &sebsd_lookup_fuse,
+	.oid_arg2    = 0,
+	.oid_name    = "lookup_fuse",
+	.oid_handler = sysctl_handle_int,
+	.oid_fmt     = "I",
+	.oid_descr   = "uninstall the lookup hook after N dispatches (0 = never)",
+	.oid_version = SYSCTL_OID_VERSION,
+};
+
 static struct sysctl_oid sebsd_sysctl_unsafe = {
 	.oid_parent  = &sebsd_sysctl_children,
 	.oid_number  = OID_AUTO,
@@ -196,11 +234,15 @@ sebsd_sysctl_register(void)
 	sysctl_register_oid(&sebsd_sysctl_trace);
 	sysctl_register_oid(&sebsd_sysctl_hooks);
 	sysctl_register_oid(&sebsd_sysctl_unsafe);
+	sysctl_register_oid(&sebsd_sysctl_lookup_fuse);
+	sysctl_register_oid(&sebsd_sysctl_lookup_count);
 }
 
 static void
 sebsd_sysctl_unregister(void)
 {
+	sysctl_unregister_oid(&sebsd_sysctl_lookup_count);
+	sysctl_unregister_oid(&sebsd_sysctl_lookup_fuse);
 	sysctl_unregister_oid(&sebsd_sysctl_unsafe);
 	sysctl_unregister_oid(&sebsd_sysctl_hooks);
 	sysctl_unregister_oid(&sebsd_sysctl_trace);

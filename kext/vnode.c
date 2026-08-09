@@ -123,17 +123,59 @@ sebsd_vnode_check_rename(kauth_cred_t cred, struct vnode *fdvp,
 /*
  * KNOWN BAD - installing this slot wedges the machine, even though the body
  * below does nothing at all. See the SEBSD_HOOK_UNSAFE note in sebsd.h for the
- * bisection that established it and the leading hypothesis. The bit is gated
- * behind `sysctl sedarwin.unsafe=1`; do not install it casually.
+ * bisection that established it. The bit is gated behind
+ * `sysctl sedarwin.unsafe=1`; do not install it casually.
+ *
+ * WHERE IT IS CALLED FROM. Unlike every other vnode hook this policy installs,
+ * this one is dispatched from cache_lookup_path() in vfs_cache.c - the name
+ * cache fast path - with the name-cache rw lock held shared. In the running
+ * kernel the call site reads:
+ *
+ *      ldr  w8, [x22, #0x4]      ; cnp->cn_flags
+ *      tbnz w8, #0xb, skip       ; bit 11 = DONOTAUTH -> skip the check
+ *      bl   mac_vnode_check_lookup
+ *      cbnz w0, error            ; error path does name_cache_unlock()
+ *
+ * So it fires once per path COMPONENT, on every lookup on the system, with a
+ * global VFS lock held. That is a different regime from the other hooks, which
+ * fire per operation with no name-cache lock.
+ *
+ * THE FUSE. Because a wedged kernel cannot be read, this hook counts its own
+ * dispatches and uninstalls itself once it has seen `sedarwin.lookup_fuse` of
+ * them (0 = no limit). That makes it possible to let the hook run a bounded
+ * number of times and then look at what happened, instead of guessing:
+ *
+ *      sysctl sedarwin.lookup_fuse=1    # allow exactly one dispatch
+ *      sysctl sedarwin.unsafe=1
+ *      sysctl sedarwin.hooks=0x10
+ *      sysctl sedarwin.lookup_count     # how many actually landed
+ *
+ * If the machine survives a fuse of 1 but dies at some larger N, the fault is
+ * cumulative - a leak or unbounded growth - rather than something wrong with
+ * the very first call. Raising N until it breaks brackets the mechanism.
+ *
+ * Clearing our own slot from inside a dispatch of it is safe: the framework has
+ * already loaded the pointer for this call, and any CPU racing the store reads
+ * either the old pointer or NULL, both of which it handles.
  */
+unsigned int sebsd_lookup_count;
+int sebsd_lookup_fuse;
+
 int
 sebsd_vnode_check_lookup(kauth_cred_t cred, struct vnode *dvp,
     struct label *dlabel, struct componentname *cnp)
 {
+	unsigned int n;
+
 	(void)dvp;
 	(void)dlabel;
 	(void)cred;
 	(void)cnp;
+
+	n = __atomic_add_fetch(&sebsd_lookup_count, 1, __ATOMIC_RELAXED);
+	if (sebsd_lookup_fuse > 0 && n >= (unsigned int)sebsd_lookup_fuse) {
+		sebsd_hooks_blow_lookup_fuse();
+	}
 	return 0;
 }
 

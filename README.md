@@ -199,13 +199,55 @@ zone-pointer validator whose failure path is `panic`. `vnode_check_lookup` fires
 on every component of every path resolution, reaching that machinery far more
 often than anything else.
 
-The leading hypothesis — **unproven** — is lazy label allocation. A late-loaded
-policy means vnodes predating it carry no label; a lookup hook forces the
+##### Where it is dispatched from
+
+Disassembling the running kernel shows this hook is called from
+`cache_lookup_path()` in `vfs_cache.c` — the name cache fast path — with the
+name-cache rw lock held shared:
+
+```
+ldr  w8, [x22, #0x4]      ; cnp->cn_flags
+tbnz w8, #0xb, skip       ; bit 11 = DONOTAUTH -> skip the check
+bl   mac_vnode_check_lookup
+cbnz w0, error            ; error path calls name_cache_unlock()
+```
+
+That is a different regime from every other vnode hook this policy installs.
+The others fire once per *operation*, with no name-cache lock. This one fires
+once per path *component*, on every lookup on the system, with a global VFS
+lock held. The dispatch code itself is byte-for-byte the same shape as
+`vnode_check_open`'s — same loop, same label resolve — so the difference is
+the calling context, not the dispatch.
+
+##### The fuse
+
+A wedged kernel cannot be read, so the hook now counts its dispatches and
+uninstalls itself after `sedarwin.lookup_fuse` of them (0 = no limit). That
+allows a bounded number of real dispatches and then a look at the result:
+
+```sh
+sudo sysctl sedarwin.lookup_fuse=1     # allow exactly one dispatch
+sudo sysctl sedarwin.unsafe=1
+sudo sysctl sedarwin.hooks=0x10        # arms it; it disarms itself
+sysctl sedarwin.lookup_count           # how many landed
+sysctl sedarwin.hooks                  # bit 0x10 gone once the fuse blew
+```
+
+Raising the fuse until it breaks brackets the mechanism. Surviving a fuse of 1
+but dying at some larger N means the fault is cumulative — a leak or unbounded
+growth — rather than something wrong with the first call. Dying even at 1 means
+it is deterministic, and the first dispatch is enough.
+
+Clearing the slot from inside a dispatch of it is safe: the framework has
+already loaded the pointer for that call, and a CPU racing the store reads
+either the old pointer or NULL, both of which it handles.
+
+A remaining hypothesis — **unproven** — is lazy label allocation. A late-loaded
+policy means vnodes predating it carry no label; a lookup hook may force the
 framework to allocate one from inside path resolution, under the caller's VFS
 locks. An allocation that needs to reclaim re-enters VFS, which re-enters
-lookup. That deadlocks exactly like this, and silently. This policy registers
-with `mpc_field_off = NULL` — no label slot of its own — which is the first
-thing to revisit.
+lookup. That would deadlock exactly like this, and silently. This policy
+registers with `mpc_field_off = NULL` — no label slot of its own.
 
 This works because the framework never copies the ops vector: it keeps the
 pointer handed to `mac_policy_register()` and re-reads the slot on every
