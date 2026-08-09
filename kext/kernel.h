@@ -1,11 +1,22 @@
 /*-
  * SEDarwin policy kext - internal umbrella header.
  *
- * Every kext translation unit includes this first. It pulls in the kernel
- * headers in a fixed order that satisfies the kernel-private headers' own
- * dependencies (user types before BSD headers, BSD before security/MAC), the
- * BSD-style <sys/malloc.h> and <sys/sbuf.h> wrappers from libkern-bsd, and the
- * hand-written MAC framework ABI (sebsd_mac.h).
+ * Every kext translation unit includes this first.
+ *
+ * Everything here comes from the PUBLIC kernel SDK (Kernel.framework) plus this
+ * project's own headers. The one unavoidable exception is sebsd_mac.h, which
+ * hand-declares the MAC framework ABI because that KPI is private and the SDK
+ * ships none of it.
+ *
+ * This used to include a stack of kernel-private headers vendored from the xnu
+ * source (sys/proc_internal.h, sys/vnode_internal.h, sys/user.h, ...). Those
+ * are gone. They are not merely redundant: the vendored copies come from a
+ * different xnu build than the running kernel, so any struct laid out from them
+ * is a guess, and pulling in one internal header dragged in most of the osfmk
+ * lock/zalloc/waitq chain behind it. Where a definition really is private, the
+ * policy now either uses the public accessor (proc_find_ident() rather than
+ * reaching into struct proc_ident) or forward-declares the type because it only
+ * ever holds a pointer to it.
  *
  * Logging is plain kernel printf() with a module tag; there is no syslog in
  * the kernel, so the policy does not attempt openlog()/syslog().
@@ -18,34 +29,24 @@
 #include <sys/cdefs.h>
 #include <sys/errno.h>
 #include <sys/param.h>
-#include <sys/ucred.h>
-#include <sys/systm.h>
-#include <libkern/libkern.h>
-
-#include <sys/malloc.h>
-#include <sys/sbuf.h>
-
-#include <sys/user.h>
-#include <sys/vnode.h>
-#include <sys/vnode_internal.h>
-#include <sys/attr.h>
-#include <sys/mount.h>
-#include <sys/file.h>
-#include <sys/file_internal.h>
+#include <sys/kernel_types.h>
 #include <sys/proc.h>
-#include <sys/proc_internal.h>
+#include <sys/kauth.h>
+#include <sys/vnode.h>
 #include <sys/namei.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
-#include <sys/mbuf.h>
-#include <sys/kauth.h>
-#include <sys/mount_internal.h>
-#include <sys/codesign.h>
-#include <sys/tty.h>
+#include <libkern/libkern.h>
+#include <kern/cs_blobs.h>
 
-#include <security/mac.h>
 #include <sedarwin/sebsd.h>
 #include <sedarwin/sebsd_mac.h>
+
+/*
+ * Types the hooks only ever take a pointer to (struct fileglob, tty, attrlist)
+ * are forward-declared in sebsd_mac.h, which has to see them before it declares
+ * the hook typedefs.
+ */
 
 /*
  * Hook implementations, grouped by subsystem. main.c wires them into

@@ -68,14 +68,16 @@ CFLAGS+= -DCONFIG_PERSONAS \
 # here.
 CFLAGS += -DAPPLEFIRESTORM
 
-# The libbsdmalloc-style <sys/malloc.h>/<sys/sbuf.h> wrappers (libkern-bsd)
-# must precede the kernel headers so they are found first and can #include_next
-# the real ones.
-XNU_INCLUDES := -I../include/xnu \
-                -I../include/xnu/bsd \
-                -I../include/xnu/libkern \
-                -I../include/xnu/osfmk \
-                -I../include/xnu/pexpert
+# No vendored xnu include paths. Everything the policy needs comes from the
+# public kernel SDK; the only hand-declared ABI is include/sedarwin/sebsd_mac.h.
+#
+# The kernel-private headers this used to vendor came from a different xnu build
+# than the running kernel, so any struct laid out from them was a guess - and
+# including one dragged in most of the osfmk lock/zalloc/waitq chain. Where a
+# definition really is private, the policy uses the public accessor
+# (proc_find_ident() rather than struct proc_ident) or forward-declares the type
+# because it only ever holds a pointer. See include/sedarwin/sebsd_mac.h.
+XNU_INCLUDES :=
 
 ARCH_SYS_INCLUDES := -isystem $(KERNEL_HEADERS)/arm64 -isystem $(KERNEL_HEADERS)/arm
 
@@ -90,7 +92,6 @@ CFLAGS+= -target $(TARGET_TRIPLE) \
          -mkernel \
          -fno-stack-check \
          -fno-stack-protector \
-         -I../lib/libkern-bsd/include \
          -I../include \
          $(XNU_INCLUDES) \
          -isystem $(KERNEL_HEADERS) \
@@ -122,13 +123,16 @@ LDFLAGS+= -target $(TARGET_TRIPLE) \
           -Xlinker -object_path_lto MachO.o \
           -Xlinker -export_dynamic
 
-LIBS+= -L$(KERNEL_LIBDIR) \
-       -L../lib/libkern-bsd
+LIBS+= -L$(KERNEL_LIBDIR)
 
 # -lkmod provides kmod_start/kmod_stop (the kext entry points for a C-style
 # kext). libkext.a no longer ships in the macOS 26 SDK and is not needed for a
 # pure-C kext.
-LIBS+= -lkmod -lkern-bsd
+#
+# libkern-bsd is deliberately NOT linked: the policy references nothing from it
+# (no _MALLOC, no sbuf - check with `nm -u`). It still builds, for the userland
+# side to use later.
+LIBS+= -lkmod
 
 all: debug
 

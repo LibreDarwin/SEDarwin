@@ -35,11 +35,6 @@ CFLAGS?=    -target $(TARGET_TRIPLE)            \
 # The vendored XNU headers (xnu-12377.1.9) shadow the SDK's for the types that
 # are missing or kernel-private there.
 CFLAGS+=    -Iinclude                            \
-            -I../../include/xnu                 \
-            -I../../include/xnu/bsd             \
-            -I../../include/xnu/libkern         \
-            -I../../include/xnu/osfmk           \
-            -I../../include/xnu/pexpert         \
             -isystem $(KERNEL_HEADERS)/arm64    \
             -isystem $(KERNEL_HEADERS)/arm      \
             -isystem $(KERNEL_HEADERS)          \

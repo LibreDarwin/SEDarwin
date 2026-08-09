@@ -49,6 +49,15 @@ make release    # same output, release-style flags
 make clean      # no sudo needed; all artifacts are user-owned
 ```
 
+The kext builds against the **public kernel SDK only** — there is no vendored
+xnu header tree. The single hand-declared interface is
+`include/sedarwin/sebsd_mac.h`, which exists because the MAC KPI is private and
+the SDK ships none of it. Where a type is kernel-private but only ever held as a
+pointer (`struct fileglob`, `struct tty`, `struct attrlist`) it is
+forward-declared; where a private struct's contents were needed, the policy uses
+the public accessor instead (`proc_find_ident()` rather than reaching into
+`struct proc_ident`).
+
 The build is split into `lib/libkern-bsd` (userspace-style helpers compiled
 with the kernel SDK, e.g. `malloc`, `sbuf`) and `kext/` (the policy itself).
 The top-level `Makefile` orchestrates both and moves the bundle into `out/`.
@@ -273,7 +282,9 @@ kext/               the policy kext sources
                     tty.c      - pty grant notification
                     spawn.c    - exec-related hooks
                     MachO.c    - in-memory Mach-O parser + load-time selftest
-lib/libkern-bsd/    malloc/sbuf helpers compiled against the kernel SDK
+lib/libkern-bsd/    malloc/sbuf helpers compiled against the kernel SDK.
+                    Built, but NOT linked into the kext - the policy references
+                    nothing from it; it is here for the userland side.
 tools/              sedarwin-load            - boot-time loader script
                     com.beako.sedarwin.plist - LaunchDaemon that runs it
 Makefile            top-level orchestrator (build/install/load/uninstall/clean)

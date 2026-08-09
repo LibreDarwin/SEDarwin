@@ -13,19 +13,37 @@
 #include "kernel.h"
 
 /*
- * Resolve a proc_ident_t to a name. This goes through proc_find() (see
- * sebsd_proc_name()) and therefore takes proc_list_lock, so it must only be
- * reached from behind sebsd_tracing() - signal delivery can run with that lock
- * already held.
+ * Resolve a proc_ident_t to a name and pid.
+ *
+ * struct proc_ident is opaque outside the kernel - the SDK declares the type
+ * but not its layout - so this goes through the public proc_find_ident()
+ * accessor rather than reading ident->p_pid out of a vendored copy of the
+ * struct, whose layout would only ever be a guess about the running kernel.
+ *
+ * proc_find_ident() takes a reference and walks the proc list, so it must only
+ * be reached from behind sebsd_tracing(): signal delivery can run with
+ * proc_list_lock already held. Returns the pid, or -1 if the process is gone.
  */
-static void
+static int
 sebsd_ident_name(proc_ident_t ident, char *buf, size_t len)
 {
+	proc_t p;
+	int pid;
+
 	if (ident == NULL) {
 		strlcpy(buf, "<kernel>", len);
-		return;
+		return -1;
 	}
-	sebsd_proc_name(ident->p_pid, buf, len);
+	/* The SDK documents PROC_NULL but does not define it; proc_t is a pointer. */
+	p = proc_find_ident(ident);
+	if (p == NULL) {
+		strlcpy(buf, "<exited>", len);
+		return -1;
+	}
+	pid = proc_pid(p);
+	proc_name(pid, buf, (int)len);
+	proc_rele(p);
+	return pid;
 }
 
 int
@@ -34,6 +52,7 @@ sebsd_proc_check_signal(kauth_cred_t cred, proc_ident_t instigator,
 {
 	char iname[MAXCOMLEN + 1];
 	char tname[MAXCOMLEN + 1];
+	int ipid, tpid;
 
 	if (!sebsd_tracing()) {
 		return 0;
@@ -43,12 +62,10 @@ sebsd_proc_check_signal(kauth_cred_t cred, proc_ident_t instigator,
 		return 0;
 	}
 
-	sebsd_ident_name(instigator, iname, sizeof(iname));
-	sebsd_ident_name(target, tname, sizeof(tname));
-	sebsd_log_debug("signal: %s(%d) -> %s(%d) sig=%d uid=%d", iname,
-	    instigator != NULL ? instigator->p_pid : 0, tname,
-	    target != NULL ? target->p_pid : 0, signum,
-	    kauth_cred_getuid(cred));
+	ipid = sebsd_ident_name(instigator, iname, sizeof(iname));
+	tpid = sebsd_ident_name(target, tname, sizeof(tname));
+	sebsd_log_debug("signal: %s(%d) -> %s(%d) sig=%d uid=%d", iname, ipid,
+	    tname, tpid, signum, kauth_cred_getuid(cred));
 	return 0;
 }
 

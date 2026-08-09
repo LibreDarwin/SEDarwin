@@ -46,8 +46,22 @@ typedef void mpo_hook_t(void);
 /*
  * Opaque kernel types referenced by the hooks we do implement. Only the ones
  * we need are declared; more can be added as hooks are ported.
+ *
+ * These must be declared at FILE scope before the hook typedefs below. A type
+ * first seen inside a prototype's parameter list belongs to that prototype's
+ * scope, so the same spelling used later at file scope is a different type and
+ * assignment of a hook into its ops slot fails with "incompatible function
+ * pointer types" - despite both sides printing identically.
+ *
+ * Several of these (fileglob, tty, attrlist) are defined only in kernel-private
+ * headers that the public SDK does not ship. The policy never dereferences
+ * them, so declaring them here is what keeps the vendored xnu tree out of the
+ * build entirely.
  */
 struct mac_policy_conf;
+struct fileglob;
+struct tty;
+struct attrlist;
 
 /* Handle into the kernel policy list, returned by mac_policy_register(). */
 typedef unsigned int mac_policy_handle_t;
