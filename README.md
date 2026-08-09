@@ -132,9 +132,15 @@ sudo sysctl sedarwin.hooks=1     # + vnode_check_open only
 sudo sysctl sedarwin.hooks=0     # back to inert
 ```
 
-A hook that wedges the machine leaves no log behind, so record what you set
-*before* setting it. The mask does not persist across a load — a fresh load is
-always back to 0.
+The mask does not persist across a load — a fresh load is always back to 0.
+
+**Validated set: `0x1fffef`.** All twenty hooks other than the quarantined
+`vnode_check_lookup` have been enabled simultaneously on macOS 26.5.2 /
+xnu-12377.121.10 (arm64e) and run without incident:
+
+```sh
+sudo sysctl sedarwin.hooks=0x1fffef   # everything except the unsafe bit
+```
 
 One bit per **hook**, not per group — when a group wedges the machine the next
 question is always *which* hook, and answering it must not cost a rebuild:
@@ -208,17 +214,50 @@ Lifecycle messages (register/init/destroy) are always emitted; per-event traces
 are **off by default** behind a runtime gate, because the check hooks fire on
 every open/exec/signal/connect on the system:
 
+The policy's output reaches the unified log, so this is the reliable way to read
+it (`dmesg` needs root and only shows the tail of the kernel buffer):
+
 ```sh
-sudo dmesg | grep sedarwin
-sudo sysctl sedarwin.trace=1   # enable per-event traces
-sudo sysctl sedarwin.trace=0   # back off
+log show --last 5m --predicate 'eventMessage CONTAINS "SEDarwin"' --style compact
+log stream --predicate 'eventMessage CONTAINS "SEDarwin"'
 ```
 
-With the gate off, the hooks do nothing but test a flag and return — no
+Successful registration also produces the framework's own line, which is worth
+knowing because it comes from the kernel rather than from this policy:
+
+```
+kernel: Security policy loaded: SEDarwin Security Extension (com.beako.security.sedarwin)
+```
+
+With the trace gate off, the hooks do nothing but test a flag and return — no
 formatting, and in particular no `proc_name()`, which resolves a pid through
 `proc_find()` and takes `proc_list_lock`. MAC hooks fire from contexts that may
 already hold that lock (signal delivery, process exit), so every per-event hook
 returns behind `sebsd_tracing()` before touching anything.
+
+#### Turning tracing on is not free
+
+```sh
+sudo sysctl sedarwin.trace=1
+sudo sysctl sedarwin.trace=0
+```
+
+**Do not enable tracing with a wide hook mask.** The gate is what makes the wide
+mask survivable. Turn it on with `hooks=0x1fffef` and every `open`, `getattr`,
+`mmap`, `fork`, `exit`, `exec` and socket operation on the system takes a kernel
+`printf` — serialized, tens of thousands per second. That is its own way to make
+the machine unusable, and it would look like a hook fault rather than what it is.
+
+Trace narrowly. Pick the low-frequency hooks first and widen only as needed:
+
+| mask | hooks | rate |
+|------|-------|------|
+| `0x40000` | pty grant | very low |
+| `0x180000` | exec check + complete | low |
+| `0x7000` | signal, fork, exit | moderate |
+| `0x38000` | socket connect/create/listen | moderate |
+| `0x400` | mmap | high |
+| `0x1` / `0x40` | open / getattr | very high — expect a flood |
 
 ## Layout
 
