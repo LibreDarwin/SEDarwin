@@ -331,10 +331,36 @@ sysctl sedarwin.lookup_count sedarwin.lookup_recursed sedarwin.lookup_maxdepth
 Then 4, 8, 16, 32. A fuse that previously killed the machine now surviving with
 `lookup_recursed=1` is the answer.
 
-Results so far: **1 and 2 both survive**, with `lookup_recursed=0` and
-`lookup_maxdepth=1` — so at that depth there is neither reentrancy nor even two
-cores in the hook at once. Two dispatches is not much of a chance to show
-either, though.
+Results so far:
+
+| fuse | result |
+|------|--------|
+| 1 | survives |
+| 2 | survives — `lookup_recursed=0`, `lookup_maxdepth=1` |
+| **4** | **freeze** |
+| 32, 1000 | freeze |
+
+**The threshold is 3 or 4 dispatches.** That reframes the problem: this is not
+rate, accumulation or lock contention — the machine dies within a handful of
+calls, so something is different about the third or fourth one. At fuse 2 there
+was neither reentrancy nor two cores in the hook at once, though two dispatches
+is a thin sample.
+
+Counts that small make per-dispatch logging affordable, which on this path would
+otherwise be indefensible. With tracing on, each dispatch records the process,
+the component being looked up, `cn_nameiop`, `cn_flags`, the directory vnode,
+its label and the thread:
+
+```sh
+sudo sysctl -w sedarwin.trace=1
+sudo sedarwin-fuse-ladder 3
+log show --last 2m --predicate 'eventMessage CONTAINS "lookup #"' --style compact
+```
+
+If 3 survives, the fourth dispatch is the fatal one and there are three logged
+predecessors to compare it against. `dvp`/`label` are printed raw on purpose:
+~97% of vnodes carry no label, so a dispatch where `label` is *not* NULL stands
+out.
 
 Walking the rest by hand costs a reboot per guess, and a freeze destroys the
 record of what was being attempted. `tools/sedarwin-fuse-ladder` (installed to

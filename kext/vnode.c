@@ -207,6 +207,34 @@ unsigned int  sebsd_lookup_depth;
 unsigned int  sebsd_lookup_maxdepth;
 unsigned int  sebsd_lookup_recursed;
 
+/*
+ * Per-dispatch trace for the quarantined hook.
+ *
+ * Normally logging from a hook on this path would be indefensible - it fires
+ * per path component, system-wide. It is affordable here only because the fuse
+ * holds the dispatch count to single digits, which is also the range the wedge
+ * lives in (safe at 2, fatal by 4). Something differs about the third or fourth
+ * call and this is what shows it.
+ *
+ * dvp and dlabel are printed raw on purpose: ~97% of vnodes carry no label, so
+ * dlabel is usually NULL, and a dispatch where it is NOT is worth spotting.
+ */
+static void __attribute__((noinline))
+sebsd_trace_lookup(unsigned int n, struct vnode *dvp, struct label *dlabel,
+    struct componentname *cnp)
+{
+	char pname[MAXCOMLEN + 1];
+	char name[SEBSD_TRACE_NAME_MAX];
+
+	sebsd_cur_name(pname, sizeof(pname));
+	sebsd_cnp_name(cnp, name, sizeof(name));
+	sebsd_log_debug("lookup #%u: %s pid=%d name=%s op=%u flags=0x%x "
+	    "dvp=%p label=%p thread=%p", n, pname, sebsd_cur_pid(), name,
+	    cnp != NULL ? cnp->cn_nameiop : 0,
+	    cnp != NULL ? cnp->cn_flags : 0,
+	    (void *)dvp, (void *)dlabel, (void *)current_thread());
+}
+
 int
 sebsd_vnode_check_lookup(kauth_cred_t cred, struct vnode *dvp,
     struct label *dlabel, struct componentname *cnp)
@@ -214,10 +242,7 @@ sebsd_vnode_check_lookup(kauth_cred_t cred, struct vnode *dvp,
 	unsigned long self = (unsigned long)current_thread();
 	unsigned int n, d;
 
-	(void)dvp;
-	(void)dlabel;
 	(void)cred;
-	(void)cnp;
 
 	if (__atomic_load_n(&sebsd_lookup_owner, __ATOMIC_RELAXED) == self) {
 		sebsd_lookup_recursed = 1;
@@ -232,6 +257,11 @@ sebsd_vnode_check_lookup(kauth_cred_t cred, struct vnode *dvp,
 	}
 
 	n = __atomic_add_fetch(&sebsd_lookup_count, 1, __ATOMIC_RELAXED);
+
+	if (sebsd_tracing()) {
+		sebsd_trace_lookup(n, dvp, dlabel, cnp);
+	}
+
 	if (sebsd_lookup_fuse > 0 && n >= (unsigned int)sebsd_lookup_fuse) {
 		sebsd_hooks_blow_lookup_fuse();
 	}
