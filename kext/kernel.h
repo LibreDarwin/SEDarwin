@@ -73,15 +73,6 @@ int     sebsd_vnode_check_rename(kauth_cred_t cred, struct vnode *fdvp,
 int     sebsd_vnode_check_lookup(kauth_cred_t cred, struct vnode *dvp,
             struct label *dlabel, struct componentname *cnp);
 
-/*
- * Instrumentation for the quarantined lookup hook (see vnode.c). The counter
- * and fuse are exported through sysctl by main.c, which also owns the ops
- * vector and so provides the "uninstall myself" call.
- */
-extern unsigned int sebsd_lookup_count;
-extern int          sebsd_lookup_fuse;
-extern int          sebsd_lookup_pid;
-void    sebsd_hooks_blow_lookup_fuse(void);
 int     sebsd_vnode_check_readlink(kauth_cred_t cred, struct vnode *vp,
             struct label *label);
 int     sebsd_vnode_check_getattr(kauth_cred_t active_cred,
@@ -92,6 +83,15 @@ int     sebsd_vnode_check_setattrlist(kauth_cred_t cred, struct vnode *vp,
 int     sebsd_vnode_label_associate_extattr(struct mount *mp,
             struct label *mntlabel, struct vnode *vp, struct label *vlabel);
 void    sebsd_vnode_label_copy(struct label *src, struct label *dest);
+
+/*
+ * Instrumentation for the quarantined lookup hook (see vnode.c). The counter
+ * and fuse are exported through sysctl by main.c, which also owns the ops
+ * vector and so provides the "uninstall myself" call.
+ */
+extern unsigned int sebsd_lookup_count;
+extern int          sebsd_lookup_fuse;
+void    sebsd_hooks_blow_lookup_fuse(void);
 
 int     sebsd_file_check_mmap(kauth_cred_t cred, struct fileglob *fg,
             struct label *label, int prot, int flags, uint64_t file_pos,

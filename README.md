@@ -240,6 +240,7 @@ Results so far:
 | fuse | outcome |
 |------|---------|
 | 1 | survives — `lookup_count` reads 1, the bit clears, machine stays up |
+| 32 | **freeze** |
 | 1000 | **freeze** — dies before the fuse can blow |
 
 A single dispatch is harmless, which retires every hypothesis that would fail
@@ -253,35 +254,42 @@ speed rules out a slow leak: 1000 allocations against a `MAC.Labels` zone
 already holding ~16000 elements is nothing. Whatever this is, it goes wrong
 almost immediately once the hook is live at system-wide rates.
 
-**Do not jump the fuse.** The threshold is somewhere in (1, 1000); bisect it
-with small values, which are genuinely bounded because 32 dispatches take
-microseconds:
+A fuse of 32 is enough. Thirty-two dispatches take microseconds, and the hook
+body at that point is *a single relaxed atomic add* — no locks, no allocation,
+no logging, not even a read of the trace flag. An atomic increment executed
+thirty-two times cannot wedge a machine.
 
-```sh
-sudo sysctl -w sedarwin.lookup_count=0 sedarwin.lookup_fuse=32
-sudo sysctl -w sedarwin.unsafe=1 sedarwin.hooks=0x10
-sysctl sedarwin.lookup_count sedarwin.hooks
-```
+**So the fault is not in this policy's code.** It is in what the kernel does
+because the slot is non-NULL, and it needs the slot to stay non-NULL across more
+than one dispatch. Roughly one lookup in ≤32 is enough to trigger it, so
+whatever the condition is, it is common rather than exotic.
 
-Then 64, 128, 256, 512. Where it breaks is itself diagnostic: a threshold in
-the tens points at a narrow concurrency window or one specific lookup, while
-surviving into the hundreds points at something that accumulates.
+##### What has been ruled out
 
-##### Separating the instrument from the dispatch
+- **The ABI.** Slot offset, struct layout and arm64e PAC discriminator all
+  verified against the KDK's DWARF and the running kernel's dispatch code.
+- **Anything deterministic on entry.** A fuse of 1 survives, so the hook is not
+  faulting when called.
+- **Our hook body.** It is one atomic add.
+- **A leak.** The machine dies within tens of milliseconds; 32 allocations
+  against a `MAC.Labels` zone holding ~15000 elements is nothing.
+- **Lazy label allocation.** The label resolver returns NULL harmlessly for an
+  unlabeled vnode — it neither allocates nor panics, and only a *corrupt*
+  (non-NULL, failing zone validation) label reaches its `panic` call. This is
+  the common case, not an edge case: the system carries 153365 vnodes and only
+  4308 labels, so ~97% of dispatches hand the policy a NULL `dlabel`.
 
-`sedarwin.lookup_pid` restricts the *hook body* to a single process. It does not
-stop the kernel dispatching for every lookup — the slot is still non-NULL — so
-it does not by itself make the hook safe. What it does is remove the counter's
-atomic from the hot path for every other process. Unfiltered, that atomic is one
-contended cache line touched by every core on the kernel's hottest path while a
-global VFS lock is held, which makes the instrument a plausible cause in its own
-right.
+##### What is left
 
-So the two outcomes separate cleanly. If a fuse that wedges unfiltered survives
-with `lookup_pid` set to an idle shell, the counter was the problem and the hook
-itself is fine. If it still wedges — with the hook body doing nothing at all for
-essentially every call — then the fault is in the dispatch path rather than in
-anything this policy does.
+The distinguishing property remains the caller: this is the only hook this
+policy installs that is dispatched from inside the name cache, holding the
+name-cache rw lock shared, once per path component.
+
+Pinning it down further means observing a kernel that is already wedged, which
+needs a second machine and KDP (`boot-args` `debug=0x144 -v`, `kdp_match_name`,
+`kmutil` remote). That is the right tool for this and the point at which
+guessing stops being cheap: every wrong hypothesis from here costs a reboot,
+and the ones that were cheap to test are now exhausted.
 
 Clearing the slot from inside a dispatch of it is safe: the framework has
 already loaded the pointer for that call, and a CPU racing the store reads

@@ -214,19 +214,6 @@ static struct sysctl_oid sebsd_sysctl_lookup_fuse = {
 	.oid_version = SYSCTL_OID_VERSION,
 };
 
-static struct sysctl_oid sebsd_sysctl_lookup_pid = {
-	.oid_parent  = &sebsd_sysctl_children,
-	.oid_number  = OID_AUTO,
-	.oid_kind    = CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_OID2,
-	.oid_arg1    = &sebsd_lookup_pid,
-	.oid_arg2    = 0,
-	.oid_name    = "lookup_pid",
-	.oid_handler = sysctl_handle_int,
-	.oid_fmt     = "I",
-	.oid_descr   = "engage the lookup hook only for this pid (0 = all)",
-	.oid_version = SYSCTL_OID_VERSION,
-};
-
 static struct sysctl_oid sebsd_sysctl_unsafe = {
 	.oid_parent  = &sebsd_sysctl_children,
 	.oid_number  = OID_AUTO,
@@ -247,7 +234,6 @@ sebsd_sysctl_register(void)
 	sysctl_register_oid(&sebsd_sysctl_trace);
 	sysctl_register_oid(&sebsd_sysctl_hooks);
 	sysctl_register_oid(&sebsd_sysctl_unsafe);
-	sysctl_register_oid(&sebsd_sysctl_lookup_pid);
 	sysctl_register_oid(&sebsd_sysctl_lookup_fuse);
 	sysctl_register_oid(&sebsd_sysctl_lookup_count);
 }
@@ -257,7 +243,6 @@ sebsd_sysctl_unregister(void)
 {
 	sysctl_unregister_oid(&sebsd_sysctl_lookup_count);
 	sysctl_unregister_oid(&sebsd_sysctl_lookup_fuse);
-	sysctl_unregister_oid(&sebsd_sysctl_lookup_pid);
 	sysctl_unregister_oid(&sebsd_sysctl_unsafe);
 	sysctl_unregister_oid(&sebsd_sysctl_hooks);
 	sysctl_unregister_oid(&sebsd_sysctl_trace);

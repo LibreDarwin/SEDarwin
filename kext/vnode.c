@@ -159,12 +159,19 @@ sebsd_vnode_check_rename(kauth_cred_t cred, struct vnode *fdvp,
  * either the old pointer or NULL, both of which it handles.
  */
 unsigned int sebsd_lookup_count;
-int sebsd_lookup_pid;
 
 /*
  * Default fuse. Small and non-zero on purpose: arming this hook at system-wide
  * lookup rates wedges the machine in milliseconds, far too fast for any fuse
  * large enough to be interesting. 0 means "no limit" and is a deliberate act.
+ *
+ * The count is deliberately GLOBAL and unconditional - it bounds how long the
+ * slot stays non-NULL, which is the only thing that actually limits exposure.
+ * An earlier version gated the counter behind a pid filter so the hook would
+ * only "engage" for one process; that was backwards. The kernel dispatches for
+ * every lookup regardless of what the body does, so counting only one process's
+ * dispatches left the slot installed until that process happened to do N
+ * lookups - extending the window rather than narrowing it. The filter is gone.
  */
 int sebsd_lookup_fuse = 16;
 
@@ -178,27 +185,6 @@ sebsd_vnode_check_lookup(kauth_cred_t cred, struct vnode *dvp,
 	(void)dlabel;
 	(void)cred;
 	(void)cnp;
-
-	/*
-	 * Narrow the blast radius to a single process when asked
-	 * (sysctl sedarwin.lookup_pid). Every path resolution on the system
-	 * comes through here, from every core at once, so measuring anything
-	 * with the hook live for all of them is measuring the whole machine.
-	 * Restricting it to one pid turns that into a controlled workload: run
-	 * something in that process and nothing else engages the hook.
-	 *
-	 * This also isolates the counter below. Unfiltered, that atomic is a
-	 * single contended cache line touched by every core on the hottest path
-	 * in the kernel while a global VFS lock is held - the instrument itself
-	 * would be a plausible cause. Filtered to one pid, it is uncontended.
-	 *
-	 * The check is deliberately the first thing here and uses only
-	 * current_proc()/proc_pid(), which take no locks.
-	 */
-	if (sebsd_lookup_pid != 0 &&
-	    proc_pid(current_proc()) != sebsd_lookup_pid) {
-		return 0;
-	}
 
 	n = __atomic_add_fetch(&sebsd_lookup_count, 1, __ATOMIC_RELAXED);
 	if (sebsd_lookup_fuse > 0 && n >= (unsigned int)sebsd_lookup_fuse) {
