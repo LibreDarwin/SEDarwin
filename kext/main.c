@@ -201,6 +201,32 @@ static struct sysctl_oid sebsd_sysctl_lookup_count = {
 	.oid_version = SYSCTL_OID_VERSION,
 };
 
+static struct sysctl_oid sebsd_sysctl_lookup_recursed = {
+	.oid_parent  = &sebsd_sysctl_children,
+	.oid_number  = OID_AUTO,
+	.oid_kind    = CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_OID2,
+	.oid_arg1    = &sebsd_lookup_recursed,
+	.oid_arg2    = 0,
+	.oid_name    = "lookup_recursed",
+	.oid_handler = sysctl_handle_int,
+	.oid_fmt     = "IU",
+	.oid_descr   = "set if the lookup hook was re-entered on one thread",
+	.oid_version = SYSCTL_OID_VERSION,
+};
+
+static struct sysctl_oid sebsd_sysctl_lookup_maxdepth = {
+	.oid_parent  = &sebsd_sysctl_children,
+	.oid_number  = OID_AUTO,
+	.oid_kind    = CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_OID2,
+	.oid_arg1    = &sebsd_lookup_maxdepth,
+	.oid_arg2    = 0,
+	.oid_name    = "lookup_maxdepth",
+	.oid_handler = sysctl_handle_int,
+	.oid_fmt     = "IU",
+	.oid_descr   = "peak simultaneous entries into the lookup hook",
+	.oid_version = SYSCTL_OID_VERSION,
+};
+
 static struct sysctl_oid sebsd_sysctl_lookup_fuse = {
 	.oid_parent  = &sebsd_sysctl_children,
 	.oid_number  = OID_AUTO,
@@ -235,6 +261,8 @@ sebsd_sysctl_register(void)
 	sysctl_register_oid(&sebsd_sysctl_hooks);
 	sysctl_register_oid(&sebsd_sysctl_unsafe);
 	sysctl_register_oid(&sebsd_sysctl_lookup_fuse);
+	sysctl_register_oid(&sebsd_sysctl_lookup_maxdepth);
+	sysctl_register_oid(&sebsd_sysctl_lookup_recursed);
 	sysctl_register_oid(&sebsd_sysctl_lookup_count);
 }
 
@@ -242,6 +270,8 @@ static void
 sebsd_sysctl_unregister(void)
 {
 	sysctl_unregister_oid(&sebsd_sysctl_lookup_count);
+	sysctl_unregister_oid(&sebsd_sysctl_lookup_recursed);
+	sysctl_unregister_oid(&sebsd_sysctl_lookup_maxdepth);
 	sysctl_unregister_oid(&sebsd_sysctl_lookup_fuse);
 	sysctl_unregister_oid(&sebsd_sysctl_unsafe);
 	sysctl_unregister_oid(&sebsd_sysctl_hooks);

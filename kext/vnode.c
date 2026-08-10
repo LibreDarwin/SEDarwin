@@ -175,21 +175,69 @@ unsigned int sebsd_lookup_count;
  */
 int sebsd_lookup_fuse = 16;
 
+/*
+ * Reentrancy detection.
+ *
+ * The remaining explanation for the wedge is that having this slot installed
+ * leads, directly or indirectly, back into path resolution on the SAME thread
+ * while it already holds the name-cache rw lock. That deadlocks, silently, and
+ * would explain every observation: harmless for one dispatch (the fuse pulls
+ * the slot before anything can re-enter), fatal once the slot survives past the
+ * first call, and independent of anything the hook body does.
+ *
+ * So detect it rather than infer it. `owner` holds the thread currently inside
+ * the hook; seeing our own thread there on entry means we have been re-entered.
+ * On that path we set a flag, pull the slot immediately and return WITHOUT
+ * recursing further - which turns a fatal hang into a fact that can be read
+ * back afterwards with `sysctl sedarwin.lookup_recursed`.
+ *
+ * The owner store races across cores, but only in the direction of false
+ * NEGATIVES: another thread can overwrite the slot and hide a genuine
+ * reentry. A false positive would require reading our own thread pointer when
+ * we are not nested, which cannot happen - thread pointers are unique and the
+ * slot is cleared on the way out. So a set flag is evidence; a clear flag is
+ * merely the absence of it.
+ *
+ * `maxdepth` separates the two ways depth can exceed 1: with `recursed` set it
+ * is reentrancy on one thread, without it, it is simply several cores in the
+ * hook at once.
+ */
+unsigned long sebsd_lookup_owner;
+unsigned int  sebsd_lookup_depth;
+unsigned int  sebsd_lookup_maxdepth;
+unsigned int  sebsd_lookup_recursed;
+
 int
 sebsd_vnode_check_lookup(kauth_cred_t cred, struct vnode *dvp,
     struct label *dlabel, struct componentname *cnp)
 {
-	unsigned int n;
+	unsigned long self = (unsigned long)current_thread();
+	unsigned int n, d;
 
 	(void)dvp;
 	(void)dlabel;
 	(void)cred;
 	(void)cnp;
 
+	if (__atomic_load_n(&sebsd_lookup_owner, __ATOMIC_RELAXED) == self) {
+		sebsd_lookup_recursed = 1;
+		sebsd_hooks_blow_lookup_fuse();
+		return 0;
+	}
+	__atomic_store_n(&sebsd_lookup_owner, self, __ATOMIC_RELAXED);
+
+	d = __atomic_add_fetch(&sebsd_lookup_depth, 1, __ATOMIC_RELAXED);
+	if (d > sebsd_lookup_maxdepth) {
+		sebsd_lookup_maxdepth = d;
+	}
+
 	n = __atomic_add_fetch(&sebsd_lookup_count, 1, __ATOMIC_RELAXED);
 	if (sebsd_lookup_fuse > 0 && n >= (unsigned int)sebsd_lookup_fuse) {
 		sebsd_hooks_blow_lookup_fuse();
 	}
+
+	__atomic_sub_fetch(&sebsd_lookup_depth, 1, __ATOMIC_RELAXED);
+	__atomic_store_n(&sebsd_lookup_owner, 0, __ATOMIC_RELAXED);
 	return 0;
 }
 

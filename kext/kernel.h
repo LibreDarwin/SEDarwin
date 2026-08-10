@@ -38,6 +38,7 @@
 #include <sys/sysctl.h>
 #include <libkern/libkern.h>
 #include <kern/cs_blobs.h>
+#include <kern/thread.h>
 
 #include <sedarwin/sebsd.h>
 #include <sedarwin/sebsd_mac.h>
@@ -89,8 +90,10 @@ void    sebsd_vnode_label_copy(struct label *src, struct label *dest);
  * and fuse are exported through sysctl by main.c, which also owns the ops
  * vector and so provides the "uninstall myself" call.
  */
-extern unsigned int sebsd_lookup_count;
-extern int          sebsd_lookup_fuse;
+extern unsigned int  sebsd_lookup_count;
+extern int           sebsd_lookup_fuse;
+extern unsigned int  sebsd_lookup_maxdepth;
+extern unsigned int  sebsd_lookup_recursed;
 void    sebsd_hooks_blow_lookup_fuse(void);
 
 int     sebsd_file_check_mmap(kauth_cred_t cred, struct fileglob *fg,

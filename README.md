@@ -279,17 +279,57 @@ whatever the condition is, it is common rather than exotic.
   the common case, not an edge case: the system carries 153365 vnodes and only
   4308 labels, so ~97% of dispatches hand the policy a NULL `dlabel`.
 
-##### What is left
+##### What is left: reentrancy
 
 The distinguishing property remains the caller: this is the only hook this
 policy installs that is dispatched from inside the name cache, holding the
 name-cache rw lock shared, once per path component.
 
-Pinning it down further means observing a kernel that is already wedged, which
-needs a second machine and KDP (`boot-args` `debug=0x144 -v`, `kdp_match_name`,
-`kmutil` remote). That is the right tool for this and the point at which
-guessing stops being cheap: every wrong hypothesis from here costs a reboot,
-and the ones that were cheap to test are now exhausted.
+That points at reentrancy. If having the slot installed leads, directly or
+indirectly, back into path resolution on the *same thread* while it already
+holds that lock, the result is a silent deadlock — and it fits every
+observation: harmless for one dispatch (the fuse pulls the slot before anything
+can re-enter), fatal as soon as the slot survives past the first call, and
+independent of what the hook body does.
+
+So the hook now detects it instead of inferring it. It records the thread
+currently inside it; seeing its own thread on entry means it has been
+re-entered, at which point it sets a flag, pulls the slot and returns without
+recursing further:
+
+```sh
+sysctl sedarwin.lookup_recursed    # 1 = re-entered on one thread
+sysctl sedarwin.lookup_maxdepth    # peak simultaneous entries
+```
+
+Read together they separate the two ways depth can exceed 1: with `recursed`
+set it is reentrancy on one thread; without it, simply several cores in the
+hook at once.
+
+The owner store races across cores, but only toward false **negatives** —
+another thread can overwrite the slot and hide a genuine reentry. A false
+positive would require reading our own thread pointer while not nested, which
+cannot happen. So a set flag is evidence; a clear flag is only the absence of it.
+
+This also has a real chance of *preventing* the hang rather than just observing
+it, since the reentrant call returns immediately with the slot already pulled.
+It will not catch a deadlock that happens on the lock acquisition itself, before
+control ever reaches the hook a second time.
+
+##### Bisecting from here
+
+1 is known safe and 32 known fatal, so step through the gap, reading the
+counters after each survival:
+
+```sh
+sudo sysctl -w sedarwin.lookup_count=0 sedarwin.lookup_recursed=0 \
+              sedarwin.lookup_maxdepth=0 sedarwin.lookup_fuse=2
+sudo sysctl -w sedarwin.unsafe=1 sedarwin.hooks=0x10
+sysctl sedarwin.lookup_count sedarwin.lookup_recursed sedarwin.lookup_maxdepth
+```
+
+Then 4, 8, 16, 32. A fuse that previously killed the machine now surviving with
+`lookup_recursed=1` is the answer.
 
 Clearing the slot from inside a dispatch of it is safe: the framework has
 already loaded the pointer for that call, and a CPU racing the store reads
