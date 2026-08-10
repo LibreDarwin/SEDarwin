@@ -1,0 +1,57 @@
+#!/bin/sh
+#
+# sedarwin-fuse-ladder - find the dispatch count at which the quarantined
+# vnode_check_lookup hook wedges the machine.
+#
+# The hook is harmless for a small number of dispatches and fatal for a larger
+# one (see the README). Finding the boundary by hand costs a reboot per guess,
+# and a freeze destroys the record of what was being attempted - so this walks
+# the ladder itself and writes each attempt to a log, flushed to disk BEFORE
+# arming. After the machine comes back:
+#
+#     cat /var/log/sedarwin-fuse.log
+#
+# The last "trying fuse=N" with no matching "survived" line is the value that
+# killed it, so one reboot yields the threshold instead of several.
+#
+# Usage:  sudo sedarwin-fuse-ladder [fuse ...]      (default ladder below)
+#
+set -u
+
+LOG=/var/log/sedarwin-fuse.log
+SETTLE=3        # seconds to let the system exercise the hook before moving on
+
+[ "$(id -u)" -eq 0 ] || { echo "must run as root"; exit 1; }
+sysctl -n sedarwin.hooks >/dev/null 2>&1 || {
+    echo "sedarwin policy is not registered; load the kext first"; exit 1
+}
+
+LADDER="${*:-4 8 16 24 32}"
+
+note() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"
+    sync                       # must survive a hard freeze
+}
+
+note "=== ladder start (pid $$) ==="
+
+for f in $LADDER; do
+    note "trying fuse=$f"
+
+    sysctl -w sedarwin.lookup_count=0 sedarwin.lookup_recursed=0 \
+              sedarwin.lookup_maxdepth=0 sedarwin.lookup_fuse="$f" \
+              sedarwin.unsafe=1 >/dev/null
+
+    # Arming is the dangerous step; everything above is already on disk.
+    sysctl -w sedarwin.hooks=0x10 >/dev/null
+
+    sleep "$SETTLE"
+
+    note "  survived fuse=$f count=$(sysctl -n sedarwin.lookup_count)" \
+         "recursed=$(sysctl -n sedarwin.lookup_recursed)" \
+         "maxdepth=$(sysctl -n sedarwin.lookup_maxdepth)" \
+         "hooks=$(sysctl -n sedarwin.hooks)"
+done
+
+note "=== ladder finished; nothing in this range wedged the machine ==="
+echo "done - see $LOG"

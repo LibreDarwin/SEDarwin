@@ -331,6 +331,25 @@ sysctl sedarwin.lookup_count sedarwin.lookup_recursed sedarwin.lookup_maxdepth
 Then 4, 8, 16, 32. A fuse that previously killed the machine now surviving with
 `lookup_recursed=1` is the answer.
 
+Results so far: **1 and 2 both survive**, with `lookup_recursed=0` and
+`lookup_maxdepth=1` — so at that depth there is neither reentrancy nor even two
+cores in the hook at once. Two dispatches is not much of a chance to show
+either, though.
+
+Walking the rest by hand costs a reboot per guess, and a freeze destroys the
+record of what was being attempted. `tools/sedarwin-fuse-ladder` (installed to
+`/usr/local/sbin`) escalates on its own and flushes each attempt to
+`/var/log/sedarwin-fuse.log` *before* arming:
+
+```sh
+sudo sedarwin-fuse-ladder            # default ladder: 4 8 16 24 32
+# ... after the machine comes back ...
+cat /var/log/sedarwin-fuse.log
+```
+
+The last `trying fuse=N` with no matching `survived` line is the value that
+killed it — so one reboot yields the threshold instead of several.
+
 Clearing the slot from inside a dispatch of it is safe: the framework has
 already loaded the pointer for that call, and a CPU racing the store reads
 either the old pointer or NULL, both of which it handles.
@@ -421,6 +440,7 @@ lib/libkern-bsd/    malloc/sbuf helpers compiled against the kernel SDK.
                     Built, but NOT linked into the kext - the policy references
                     nothing from it; it is here for the userland side.
 tools/              sedarwin-load            - boot-time loader script
+                    sedarwin-fuse-ladder     - lookup-hook threshold finder
                     com.beako.sedarwin.plist - LaunchDaemon that runs it
 Makefile            top-level orchestrator (build/install/load/uninstall/clean)
 Makefile.inc        variables; single source of truth: VERSION

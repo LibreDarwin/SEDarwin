@@ -39,6 +39,7 @@ BUNDLE_ID  := com.beako.security.sedarwin
 SBIN_DIR     := /usr/local/sbin
 DAEMON_DIR   := /Library/LaunchDaemons
 LOAD_SCRIPT  := sedarwin-load
+LADDER_SCRIPT:= sedarwin-fuse-ladder
 DAEMON_PLIST := com.beako.sedarwin.plist
 DAEMON_LABEL := com.beako.sedarwin
 ARM_FLAG     := /var/db/sedarwin.enabled
@@ -75,6 +76,7 @@ install: require-root require-built
 	chmod -R 755 $(EXT_DIR)/sedarwin.kext
 	install -d -m 755 -o root -g wheel $(SBIN_DIR)
 	install -m 755 -o root -g wheel tools/$(LOAD_SCRIPT) $(SBIN_DIR)/$(LOAD_SCRIPT)
+	install -m 755 -o root -g wheel tools/$(LADDER_SCRIPT) $(SBIN_DIR)/$(LADDER_SCRIPT)
 	install -m 644 -o root -g wheel tools/$(DAEMON_PLIST) $(DAEMON_DIR)/$(DAEMON_PLIST)
 	@# A prior `launchctl disable` persists across boots in launchd's override
 	@# database, and would silently defeat RunAtLoad on the next install.
@@ -99,7 +101,8 @@ require-built:
 
 uninstall: require-root
 	-@launchctl bootout system/$(DAEMON_LABEL) 2>/dev/null || true
-	rm -f $(DAEMON_DIR)/$(DAEMON_PLIST) $(SBIN_DIR)/$(LOAD_SCRIPT) $(ARM_FLAG)
+	rm -f $(DAEMON_DIR)/$(DAEMON_PLIST) $(SBIN_DIR)/$(LOAD_SCRIPT) \
+	      $(SBIN_DIR)/$(LADDER_SCRIPT) $(ARM_FLAG)
 	-@kmutil unload -b $(BUNDLE_ID) 2>/dev/null || true
 	-@kmutil clear-staging 2>/dev/null || true
 	rm -rf $(EXT_DIR)/sedarwin.kext
