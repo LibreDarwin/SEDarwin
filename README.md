@@ -235,31 +235,53 @@ sysctl sedarwin.hooks                  # bit 0x10 gone once the fuse blew
 
 Raising the fuse until it breaks brackets the mechanism.
 
-**Result: a fuse of 1 survives.** `lookup_count` reads 1, the fuse clears the
-bit from `sedarwin.hooks`, and the machine stays up. So a single dispatch of
-this hook is harmless, and the fault is **cumulative or rate-dependent** — not
-something wrong with the first call. That also retires any lingering doubt about
-the slot, the signature or the label resolve: all of those would fail
-deterministically on dispatch #1.
+Results so far:
 
-##### Measuring the leak hypothesis
+| fuse | outcome |
+|------|---------|
+| 1 | survives — `lookup_count` reads 1, the bit clears, machine stays up |
+| 1000 | **freeze** — dies before the fuse can blow |
 
-The kernel has a `MAC.Labels` zone and `zprint` reports it without root, so a
-label leak can be tested at a safe fuse rather than by escalating into the wedge:
+A single dispatch is harmless, which retires every hypothesis that would fail
+deterministically on dispatch #1: a bad slot, a wrong signature, a PAC
+mismatch, a NULL-label panic in the resolver.
+
+The 1000 result is the more informative one. Every path resolution on the
+system comes through this hook, from every core, so 1000 dispatches is a few
+tens of milliseconds — the machine died well before the fuse could fire. That
+speed rules out a slow leak: 1000 allocations against a `MAC.Labels` zone
+already holding ~16000 elements is nothing. Whatever this is, it goes wrong
+almost immediately once the hook is live at system-wide rates.
+
+**Do not jump the fuse.** The threshold is somewhere in (1, 1000); bisect it
+with small values, which are genuinely bounded because 32 dispatches take
+microseconds:
 
 ```sh
-zprint | awk '/^MAC\.Labels/{print $7}'      # inuse, before
-sudo sysctl -w sedarwin.lookup_count=0 sedarwin.lookup_fuse=1000
+sudo sysctl -w sedarwin.lookup_count=0 sedarwin.lookup_fuse=32
 sudo sysctl -w sedarwin.unsafe=1 sedarwin.hooks=0x10
-# wait for sedarwin.hooks to fall back to 0
-zprint | awk '/^MAC\.Labels/{print $7}'      # inuse, after
+sysctl sedarwin.lookup_count sedarwin.hooks
 ```
 
-If the delta tracks the dispatch count, the mechanism is a label leak. If it is
-flat, the remaining explanation is contention — this hook lengthens the critical
-section under the name-cache lock while every core is resolving paths — which is
-rate- and concurrency-dependent rather than count-dependent, and needs a
-different probe.
+Then 64, 128, 256, 512. Where it breaks is itself diagnostic: a threshold in
+the tens points at a narrow concurrency window or one specific lookup, while
+surviving into the hundreds points at something that accumulates.
+
+##### Separating the instrument from the dispatch
+
+`sedarwin.lookup_pid` restricts the *hook body* to a single process. It does not
+stop the kernel dispatching for every lookup — the slot is still non-NULL — so
+it does not by itself make the hook safe. What it does is remove the counter's
+atomic from the hot path for every other process. Unfiltered, that atomic is one
+contended cache line touched by every core on the kernel's hottest path while a
+global VFS lock is held, which makes the instrument a plausible cause in its own
+right.
+
+So the two outcomes separate cleanly. If a fuse that wedges unfiltered survives
+with `lookup_pid` set to an idle shell, the counter was the problem and the hook
+itself is fine. If it still wedges — with the hook body doing nothing at all for
+essentially every call — then the fault is in the dispatch path rather than in
+anything this policy does.
 
 Clearing the slot from inside a dispatch of it is safe: the framework has
 already loaded the pointer for that call, and a CPU racing the store reads

@@ -80,6 +80,7 @@ int     sebsd_vnode_check_lookup(kauth_cred_t cred, struct vnode *dvp,
  */
 extern unsigned int sebsd_lookup_count;
 extern int          sebsd_lookup_fuse;
+extern int          sebsd_lookup_pid;
 void    sebsd_hooks_blow_lookup_fuse(void);
 int     sebsd_vnode_check_readlink(kauth_cred_t cred, struct vnode *vp,
             struct label *label);
